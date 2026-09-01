@@ -14,22 +14,26 @@ class GitHubRateLimitError(Exception):
 class GitHubClient:
     """Rate-limit-aware httpx wrapper for GitHub API."""
 
-    def __init__(self):
-        settings = get_settings()
-        self.headers = {
-            "Accept": "application/vnd.github.v3+json",
-            "Authorization": f"Bearer {settings.github_token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
+    def __init__(self, token: str | None = None):
+        self.token = token or get_settings().github_token
         self.base_url = "https://api.github.com"
         # We use a single shared client per instance to pool connections
         self._client = None
+
+    def get_headers(self) -> dict:
+        headers = {
+            "Accept": "application/vnd.github.v3+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
 
     @property
     def client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
-                headers=self.headers, base_url=self.base_url, timeout=10.0
+                headers=self.get_headers(), base_url=self.base_url, timeout=10.0
             )
         return self._client
 
@@ -37,10 +41,16 @@ class GitHubClient:
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
 
-    async def get(self, endpoint: str, params: dict | None = None) -> httpx.Response:
-        """Make a GET request to GitHub, respecting rate limits."""
+    async def get(
+        self, endpoint: str, params: dict | None = None, etag: str | None = None
+    ) -> httpx.Response:
+        """Make a GET request to GitHub, respecting rate limits and ETags."""
         client = self.client
-        response = await client.get(endpoint, params=params)
+        headers = {}
+        if etag:
+            headers["If-None-Match"] = etag
+
+        response = await client.get(endpoint, params=params, headers=headers)
 
         self._check_rate_limit(response)
 
@@ -52,10 +62,11 @@ class GitHubClient:
                 import time
                 sleep_time = max(0, reset_time - int(time.time())) + 1
                 logger.warning(f"GitHub Rate Limit Exceeded. Sleeping for {sleep_time}s.")
-                # We raise instead of sleep here to let the caller or scheduler handle it,
-                # as sleeping for potentially an hour in a web request is bad.
                 raise GitHubRateLimitError(f"Rate limit exceeded. Resets in {sleep_time}s.")
 
+        if response.status_code == 304:
+            return response
+            
         response.raise_for_status()
         return response
         

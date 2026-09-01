@@ -1,29 +1,57 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
-import { useSelectedOwner } from '../hooks/useSelectedOwner';
 import { api } from '../api/client';
 import { Loader } from '../components/Loader';
-import { OwnerSelect } from '../components/OwnerSelect';
+import { NetworkStory } from '../components/NetworkStory';
+import { PeriodSelector } from '../components/PeriodSelector';
+
+function readPeriod() {
+  const stored = localStorage.getItem('whatisup:period');
+  return ['7d', '14d', '30d', 'this_week'].includes(stored) ? stored : '7d';
+}
+
+const GROUPS = [
+  { key: 'more_active', label: 'More active' },
+  { key: 'steady', label: 'Steady' },
+  { key: 'quiet', label: 'Quiet' },
+];
 
 export function Network() {
-  const { data: owners, loading: ownersLoading } = useApi(api.getOwners, []);
-  const { ownerId, selectOwner } = useSelectedOwner(owners);
-  const { data: connections, loading, error, refetch } = useApi(
-    api.getConnections,
-    [ownerId],
-    { enabled: Boolean(ownerId) }
-  );
-  const [secret, setSecret] = useState(() => localStorage.getItem('whatisup_admin_secret') || '');
+  const [searchParams] = useSearchParams();
+  const tech = searchParams.get('tech') || '';
+  const [period, setPeriod] = useState(readPeriod);
+  const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
+  const { data: digest, loading, error, refetch } = useApi(api.getDigestV2, [period]);
+  const { data: story } = useApi(api.getNetworkStory, []);
 
-  const toggle = async (connection) => {
-    if (!secret) {
-      setStatus('Enter the admin secret to change close-circle flags.');
-      return;
-    }
+  const people = useMemo(() => {
+    const rows = digest?.people || [];
+    const needle = query.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (tech && !(row.technologies || []).some((name) => name.toLowerCase() === tech.toLowerCase())) {
+        return false;
+      }
+      if (!needle) return true;
+      const person = row.person || {};
+      const hay = `${person.display_name || ''} ${person.github_username || ''} ${row.headline || ''} ${(row.technologies || []).join(' ')}`.toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [digest, query, tech]);
+
+  const grouped = useMemo(() => {
+    const buckets = { more_active: [], steady: [], quiet: [] };
+    people.forEach((row) => {
+      const level = buckets[row.activity_level] ? row.activity_level : 'quiet';
+      buckets[level].push(row);
+    });
+    return buckets;
+  }, [people]);
+
+  const toggle = async (row) => {
     try {
-      await api.toggleCloseCircle(connection.id, !connection.is_close, secret);
+      await api.toggleCloseCircle(row.connection_id, !row.is_close);
       setStatus('');
       refetch();
     } catch (err) {
@@ -31,69 +59,82 @@ export function Network() {
     }
   };
 
-  if (ownersLoading || (ownerId && loading)) return <Loader />;
-  if (!ownerId) {
-    return <div className="glass-panel" style={{ padding: '2rem' }}>Add an owner in Admin first.</div>;
-  }
+  if (loading) return <Loader />;
   if (error) {
     return <div className="glass-panel" style={{ padding: '2rem' }}>Could not load network: {error}</div>;
   }
 
   return (
-    <div>
-      <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', gap: '1.5rem', flexWrap: 'wrap' }}>
+    <div className="network-page">
+      <header className="network-header">
         <div>
-          <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>Network</h1>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            {(connections || []).length} people for this owner. Mark close-circle so they always appear on Digest.
+          <h1>Explore the network</h1>
+          <p>
+            {(digest?.people || []).length} people you are tracking
+            {tech ? ` · filtered to ${tech}` : '. Home only shows the strongest stories.'}
           </p>
         </div>
-        <OwnerSelect owners={owners} ownerId={ownerId} onChange={selectOwner} />
+        <PeriodSelector value={period} onChange={setPeriod} />
       </header>
 
-      <div className="glass-panel" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem' }}>
+      <NetworkStory story={story} />
+
+      <div className="network-toolbar">
         <input
-          type="password"
-          placeholder="Admin secret (needed to toggle close circle)"
-          value={secret}
-          onChange={(e) => {
-            setSecret(e.target.value);
-            localStorage.setItem('whatisup_admin_secret', e.target.value);
-          }}
-          style={{
-            width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)',
-            background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)', color: 'white',
-          }}
+          className="network-search"
+          type="search"
+          value={query}
+          placeholder="Search by name, headline, or technology"
+          onChange={(event) => setQuery(event.target.value)}
         />
-        {status && <p style={{ color: 'var(--warning)', marginTop: '0.75rem' }}>{status}</p>}
+        {tech && <Link to="/network">Clear tech filter</Link>}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
-        {(connections || []).map((conn) => (
-          <div key={conn.id} className="glass-card">
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-              <img
-                src={conn.person.avatar_url || `https://github.com/${conn.person.github_username}.png`}
-                alt={conn.person.github_username}
-                style={{ width: '40px', height: '40px', borderRadius: '50%' }}
-              />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <Link to={`/person/${conn.person.id}`}>
-                  {conn.person.display_name || conn.person.github_username}
-                </Link>
-                <p style={{ color: 'var(--text-tertiary)', fontSize: '0.85rem' }}>@{conn.person.github_username}</p>
-              </div>
+      {status && <p style={{ color: 'var(--warning)' }}>{status}</p>}
+
+      {GROUPS.map((group) => {
+        const rows = grouped[group.key] || [];
+        if (!rows.length) return null;
+        return (
+          <section key={group.key} className="network-group">
+            <div className="section-heading">
+              <h2>{group.label}</h2>
+              <span>{rows.length}</span>
             </div>
-            <button
-              className={conn.is_close ? 'btn btn-primary' : 'btn btn-secondary'}
-              style={{ marginTop: '1rem', width: '100%' }}
-              onClick={() => toggle(conn)}
-            >
-              {conn.is_close ? 'Close circle' : 'Mark close'}
-            </button>
-          </div>
-        ))}
-      </div>
+            <div className="network-grid">
+              {rows.map((row) => {
+                const person = row.person || {};
+                return (
+                  <article key={row.connection_id} className="glass-card network-person-card">
+                    <div className="network-person-head">
+                      <img
+                        src={person.avatar_url || `https://github.com/${person.github_username}.png`}
+                        alt={person.github_username}
+                      />
+                      <div>
+                        <Link to={`/person/${person.id}`}>
+                          {person.display_name || person.github_username}
+                        </Link>
+                        <p>@{person.github_username}</p>
+                      </div>
+                    </div>
+                    {row.headline && <p className="network-headline">{row.headline}</p>}
+                    {row.current_focus && (
+                      <p className="network-focus">Focused on {row.current_focus}</p>
+                    )}
+                    <button
+                      className={row.is_close ? 'btn btn-primary' : 'btn btn-secondary'}
+                      onClick={() => toggle(row)}
+                    >
+                      {row.is_close ? 'Close circle' : 'Mark close'}
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

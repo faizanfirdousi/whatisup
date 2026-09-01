@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.models.owner import Owner
 from app.models.connection import Connection
 from app.pipeline import seed_connections_for_owner, run_global_pipeline
+from app.github.client import GitHubClient
 from app.serializers import owner_to_dict
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,11 @@ async def create_owner(owner_in: OwnerCreate, db: AsyncSession = Depends(get_db)
             owner.delivery_email = owner_in.delivery_email
 
     try:
-        seed_info = await seed_connections_for_owner(db, owner.id, owner.github_username)
+        client = GitHubClient()
+        try:
+            seed_info = await seed_connections_for_owner(db, owner.id, owner.github_username, client=client)
+        finally:
+            await client.close()
     except httpx.HTTPStatusError as e:
         status = e.response.status_code if e.response is not None else 502
         if status == 404:

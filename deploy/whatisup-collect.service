@@ -1,0 +1,7 @@
+[Unit]
+Description=WhatIsUp collect via internal API
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/whatisup.env
+ExecStart=/usr/bin/curl -fsS -X POST "http://127.0.0.1:8080/internal/run-pipeline?phase=collect" -H "X-Cron-Secret: ${CRON_SECRET}"

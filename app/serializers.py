@@ -21,6 +21,7 @@ def owner_to_dict(owner: Owner) -> dict[str, Any]:
         "github_username": owner.github_username,
         "delivery_email": owner.delivery_email,
         "is_active": owner.is_active,
+        "is_builder": owner.is_builder,
         "created_at": _iso(owner.created_at),
     }
 
@@ -28,12 +29,27 @@ def owner_to_dict(owner: Owner) -> dict[str, Any]:
 def insight_to_dict(insight: Insight | None) -> dict[str, Any] | None:
     if insight is None:
         return None
+    import json
+    text = insight.narrative_text or ""
+    try:
+        if text.strip().startswith("{"):
+            enriched = json.loads(text)
+        else:
+            enriched = {"narrative": text}
+    except json.JSONDecodeError:
+        enriched = {"narrative": text}
+
     return {
         "id": insight.id,
         "person_id": insight.person_id,
         "week_start": _iso(insight.week_start),
         "week_end": _iso(insight.week_end),
-        "narrative_text": insight.narrative_text,
+        "narrative_text": enriched.get("narrative", text),
+        "headline": enriched.get("headline"),
+        "why_it_matters": enriched.get("why_it_matters"),
+        "focus_area": enriched.get("focus_area"),
+        "activity_type": enriched.get("activity_type", "routine"),
+        "technologies_mentioned": enriched.get("technologies_mentioned", []),
         "supporting_event_ids": insight.supporting_event_ids,
         "significance_total": insight.significance_total,
         "model_used": insight.model_used,

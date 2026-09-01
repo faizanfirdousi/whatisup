@@ -6,7 +6,7 @@ import httpx
 from app.config import get_settings
 from app.narrative.schema import WeeklyNarrative
 from app.narrative.prompts import SYSTEM_PROMPT
-from app.narrative.template import template_narrative
+from app.narrative.template import template_narrative, template_narrative_enriched
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,28 @@ def sanitize_narrative(
     if not output.narrative.strip():
         return None
     return WeeklyNarrative(
+        headline=output.headline,
         narrative=output.narrative,
+        why_it_matters=output.why_it_matters,
         technologies_mentioned=techs,
         supporting_event_ids=event_ids,
+        focus_area=output.focus_area,
+        activity_type=output.activity_type,
     )
+
+
+def _narrative_to_enriched(parsed: WeeklyNarrative, model_name: str) -> dict[str, Any]:
+    """Convert a parsed WeeklyNarrative to the enriched dict format."""
+    return {
+        "headline": parsed.headline,
+        "narrative": parsed.narrative,
+        "why_it_matters": parsed.why_it_matters,
+        "focus_area": parsed.focus_area,
+        "activity_type": parsed.activity_type,
+        "technologies_mentioned": parsed.technologies_mentioned,
+        "supporting_event_ids": parsed.supporting_event_ids,
+        "model_used": model_name,
+    }
 
 
 async def generate_weekly_narrative(
@@ -93,8 +111,8 @@ async def generate_weekly_narrative(
 
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "HTTP-Referer": "http://localhost:5173", # Optional but recommended by OpenRouter
-        "X-Title": "WhatIsUp", # Optional but recommended by OpenRouter
+        "HTTP-Referer": settings.public_app_url,
+        "X-Title": "WhatIsUp",
     }
     
     payload = {
@@ -127,7 +145,9 @@ async def generate_weekly_narrative(
                 payload.pop("response_format", None)
                 payload["messages"][0]["content"] = (
                     SYSTEM_PROMPT + "\nRespond with JSON only: "
-                    '{"narrative": str, "technologies_mentioned": [str], "supporting_event_ids": [int]}'
+                    '{"headline": str, "narrative": str, "why_it_matters": str|null, '
+                    '"technologies_mentioned": [str], "supporting_event_ids": [int], '
+                    '"focus_area": str|null, "activity_type": str|null}'
                 )
                 resp = await client.post(
                     f"{settings.openrouter_base_url}/chat/completions",
@@ -155,3 +175,100 @@ async def generate_weekly_narrative(
     except Exception as e:
         logger.error("Error generating narrative: %s", e)
         return template_text, template_ids, template_model
+
+
+async def generate_weekly_narrative_enriched(
+    person: dict[str, Any],
+    events: list[dict[str, Any]],
+    technologies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    Generate an enriched narrative with headline, why_it_matters, etc.
+    Returns a dict with all enriched fields.
+    """
+    settings = get_settings()
+    enriched_template = template_narrative_enriched(person, events, technologies)
+
+    if not events or not settings.openrouter_api_key:
+        return enriched_template
+
+    allowed_technologies = {t["name"].lower() for t in technologies}
+    allowed_event_ids = {e["id"] for e in events}
+
+    context = {
+        "person": {
+            "username": person["github_username"],
+            "display_name": person.get("display_name"),
+        },
+        "technologies": technologies,
+        "events": [
+            {
+                "id": e["id"],
+                "type": e["event_type"],
+                "repo": e["repo_full_name"],
+                "date": (
+                    e["occurred_at"].isoformat()
+                    if hasattr(e["occurred_at"], "isoformat")
+                    else str(e["occurred_at"])
+                ),
+                "score": e["significance_score"],
+                "metadata": e.get("metadata_", {}),
+            }
+            for e in events
+        ],
+    }
+
+    schema = WeeklyNarrative.model_json_schema()
+    headers = {
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "HTTP-Referer": settings.public_app_url,
+        "X-Title": "WhatIsUp",
+    }
+    payload = {
+        "model": settings.openrouter_model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(context)},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "WeeklyNarrative", "schema": schema, "strict": True},
+        },
+        "temperature": 0.0,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                f"{settings.openrouter_base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            if resp.status_code >= 400:
+                payload.pop("response_format", None)
+                payload["messages"][0]["content"] = (
+                    SYSTEM_PROMPT + "\nRespond with JSON only."
+                )
+                resp = await client.post(
+                    f"{settings.openrouter_base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            raw_content = data["choices"][0]["message"]["content"] or ""
+            text = raw_content.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1]
+                if text.endswith("```"):
+                    text = text[: text.rfind("```")]
+            parsed = WeeklyNarrative.model_validate_json(text.strip())
+            cleaned = sanitize_narrative(parsed, allowed_technologies, allowed_event_ids)
+            result = cleaned or parsed
+            if cleaned or passes_grounding_check(parsed, allowed_technologies, allowed_event_ids):
+                return _narrative_to_enriched(result, data.get("model", settings.openrouter_model))
+            logger.warning("Enriched LLM narrative failed grounding; using template")
+    except Exception as e:
+        logger.error("Error generating enriched narrative: %s", e)
+
+    return enriched_template

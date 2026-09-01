@@ -1,6 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
 
 class WeeklyNarrative(BaseModel):
-    narrative: str = Field(description="1-3 plain sentences describing the week's activity.")
-    technologies_mentioned: list[str] = Field(description="List of technologies explicitly mentioned.")
-    supporting_event_ids: list[int] = Field(description="List of event IDs that support the narrative facts.")
+    headline: str = ""                          # 1-line attention grabber
+    narrative: str                              # 1-3 sentence summary
+    why_it_matters: str | None = None           # grounded interpretation
+    technologies_mentioned: list[str]
+    supporting_event_ids: list[int]
+    focus_area: str | None = None               # e.g. "observability", "infrastructure"
+    activity_type: str | None = None            # e.g. "external_contribution", "release"

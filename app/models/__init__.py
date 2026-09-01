@@ -5,6 +5,8 @@ from app.models.activity_event import ActivityEvent
 from app.models.technology import Technology, PersonTechnology
 from app.models.insight import Insight
 from app.models.digest_delivery import DigestDelivery
+from app.models.pipeline_run import PipelineRun
+from app.models.network_story import NetworkStory
 
 __all__ = [
     "Owner",
@@ -15,4 +17,7 @@ __all__ = [
     "PersonTechnology",
     "Insight",
     "DigestDelivery",
+    "PipelineRun",
+    "NetworkStory",
 ]
+

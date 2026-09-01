@@ -21,8 +21,8 @@ export function StatsBar({ stats }) {
           <Activity size={24} />
         </div>
         <div>
-          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Events Collected</p>
-          <p style={{ fontSize: '1.5rem', fontWeight: 600, fontFamily: 'Outfit' }}>{stats.total_events_collected}</p>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Events this week</p>
+          <p style={{ fontSize: '1.5rem', fontWeight: 600, fontFamily: 'Outfit' }}>{stats.events_this_week ?? stats.total_events_collected}</p>
         </div>
       </div>
 

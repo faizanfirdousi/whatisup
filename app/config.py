@@ -11,8 +11,12 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://whatisup:whatisup@localhost:5432/whatisup"
 
-    # GitHub
+    # GitHub PAT (fallback / local dev only in v1)
     github_token: str = ""
+
+    # GitHub OAuth (v1)
+    github_client_id: str = ""
+    github_client_secret: str = ""
 
     # OpenRouter LLM
     openrouter_api_key: str = ""
@@ -21,6 +25,26 @@ class Settings(BaseSettings):
 
     # Admin
     admin_secret: str = "change-me-to-something-random"
+
+    # Cron / internal pipeline trigger (v1)
+    cron_secret: str = ""
+
+    # Session (v1)
+    session_secret: str = "change-me-session-secret"
+
+    # Token encryption (v1 — Fernet key for GitHub access tokens)
+    token_encryption_key: str = ""
+
+    # URLs
+    public_app_url: str = "http://localhost:8000"
+    frontend_origin: str = "http://localhost:5173"
+    chrome_extension_origin: str = ""
+
+    # Cookies (set true behind HTTPS)
+    cookie_secure: bool = False
+
+    # Collector tuning
+    collect_min_interval: int = 900  # seconds (15 min debounce)
 
     # App
     app_name: str = "WhatIsUp"

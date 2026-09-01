@@ -1,5 +1,3 @@
-from datetime import datetime, timedelta, timezone
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -12,13 +10,13 @@ from app.models.connection import Connection
 from app.models.activity_event import ActivityEvent
 from app.models.insight import Insight
 from app.models.technology import Technology, PersonTechnology
-from app.narrative.template import activity_digest, template_narrative
+from app.narrative.template import activity_digest
+from app.network.facts import get_period_bounds
 from app.serializers import owner_to_dict, insight_to_dict, event_to_dict, connection_to_dict
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 HIGHLIGHT_THRESHOLD = 8
-ACTIVITY_LOOKBACK_DAYS = 30
 
 
 def _insight_is_usable(insight: Insight | None) -> bool:
@@ -40,6 +38,7 @@ def _person_payload(person: Person, *, is_close: bool, insight: Insight | None, 
             "event_type": e.event_type,
             "repo_full_name": e.repo_full_name,
             "significance_score": e.significance_score,
+            "metadata_": e.metadata_,
         }
         for e in events
     ]
@@ -49,16 +48,32 @@ def _person_payload(person: Person, *, is_close: bool, insight: Insight | None, 
         "display_name": person.display_name,
     }
     if _insight_is_usable(insight):
-        narrative = insight.narrative_text
+        parsed = insight_to_dict(insight) or {}
+        narrative = parsed.get("narrative_text") or insight.narrative_text
         model = insight.model_used
         supporting = insight.supporting_event_ids
         week_start = insight.week_start.isoformat() if insight.week_start else None
         week_end = insight.week_end.isoformat() if insight.week_end else None
         total = insight.significance_total or stats["significance_total"]
+        headline = parsed.get("headline")
+        why_it_matters = parsed.get("why_it_matters")
+        focus_area = parsed.get("focus_area")
+        activity_type = parsed.get("activity_type")
+        technologies = parsed.get("technologies_mentioned") or []
     else:
-        narrative, supporting, model = template_narrative(person_info, event_dicts, [])
+        from app.narrative.template import template_narrative_enriched
+
+        enriched = template_narrative_enriched(person_info, event_dicts, [])
+        narrative = enriched["narrative"]
+        supporting = enriched["supporting_event_ids"]
+        model = enriched["model_used"]
         week_start = week_end = None
         total = stats["significance_total"]
+        headline = enriched["headline"]
+        why_it_matters = enriched["why_it_matters"]
+        focus_area = enriched["focus_area"]
+        activity_type = enriched["activity_type"]
+        technologies = enriched["technologies_mentioned"]
 
     latest = None
     if stats["event_count"] or _insight_is_usable(insight):
@@ -69,6 +84,11 @@ def _person_payload(person: Person, *, is_close: bool, insight: Insight | None, 
             "model_used": model,
             "week_start": week_start,
             "week_end": week_end,
+            "headline": headline,
+            "why_it_matters": why_it_matters,
+            "focus_area": focus_area,
+            "activity_type": activity_type,
+            "technologies_mentioned": technologies,
         }
 
     return {
@@ -79,48 +99,36 @@ def _person_payload(person: Person, *, is_close: bool, insight: Insight | None, 
         "is_close": is_close,
         "event_count": stats["event_count"],
         "top_repos": stats["top_repos"],
+        "meaningful_changes": sum(1 for e in events if (e.significance_score or 0) >= 5),
         "latest_insight": latest,
     }
 
 
-@router.get("/owners")
-async def list_owners(db: AsyncSession = Depends(get_db)):
-    res = await db.execute(select(Owner).order_by(Owner.id))
-    owners = res.scalars().all()
-    count_res = await db.execute(
-        select(Connection.owner_id, func.count(Connection.id)).group_by(Connection.owner_id)
-    )
-    counts = {row[0]: row[1] for row in count_res.all()}
-    payload = []
-    for owner in owners:
-        item = owner_to_dict(owner)
-        item["connection_count"] = counts.get(owner.id, 0)
-        payload.append(item)
-    return payload
+from app.auth.session import get_current_owner
 
-
-@router.get("/owners/{owner_id}/digest")
-async def get_owner_digest(owner_id: int, db: AsyncSession = Depends(get_db)):
-    owner = await db.get(Owner, owner_id)
-    if not owner:
-        raise HTTPException(status_code=404, detail="Owner not found")
-
+@router.get("/me/digest")
+async def get_my_digest(
+    period: str = "7d",
+    db: AsyncSession = Depends(get_db),
+    owner: Owner = Depends(get_current_owner),
+):
     res = await db.execute(
         select(Connection)
         .options(selectinload(Connection.person).selectinload(Person.insights))
-        .where(Connection.owner_id == owner_id)
+        .where(Connection.owner_id == owner.id)
     )
     connections = res.scalars().all()
     person_ids = [c.person_id for c in connections]
 
-    lookback = datetime.now(timezone.utc) - timedelta(days=ACTIVITY_LOOKBACK_DAYS)
+    _, _, start_dt, end_dt = get_period_bounds(period)
     events_by_person: dict[int, list[ActivityEvent]] = {pid: [] for pid in person_ids}
     if person_ids:
         ev_res = await db.execute(
             select(ActivityEvent)
             .where(
                 ActivityEvent.person_id.in_(person_ids),
-                ActivityEvent.occurred_at >= lookback,
+                ActivityEvent.occurred_at >= start_dt,
+                ActivityEvent.occurred_at <= end_dt,
             )
             .order_by(ActivityEvent.occurred_at.desc())
         )
@@ -164,31 +172,55 @@ async def get_owner_digest(owner_id: int, db: AsyncSession = Depends(get_db)):
         "close_circle": close_circle,
         "network_highlights": network_highlights,
         "rest_of_network": rest_of_network,
-        "lookback_days": ACTIVITY_LOOKBACK_DAYS,
+        "period": period,
         "highlight_threshold": HIGHLIGHT_THRESHOLD,
     }
 
 
-@router.get("/owners/{owner_id}/connections")
-async def get_owner_connections(owner_id: int, db: AsyncSession = Depends(get_db)):
-    owner = await db.get(Owner, owner_id)
-    if not owner:
-        raise HTTPException(status_code=404, detail="Owner not found")
-
+@router.get("/me/connections")
+async def get_my_connections(
+    tech: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    owner: Owner = Depends(get_current_owner),
+):
     res = await db.execute(
         select(Connection)
         .options(selectinload(Connection.person))
-        .where(Connection.owner_id == owner_id)
+        .where(Connection.owner_id == owner.id)
         .order_by(Connection.is_close.desc(), Connection.id)
     )
-    return [connection_to_dict(c) for c in res.scalars().all()]
+    connections = list(res.scalars().all())
+    if tech:
+        needle = tech.strip().lower()
+        person_ids = [c.person_id for c in connections]
+        if person_ids:
+            tech_res = await db.execute(
+                select(PersonTechnology.person_id)
+                .join(Technology, Technology.id == PersonTechnology.technology_id)
+                .where(
+                    PersonTechnology.person_id.in_(person_ids),
+                    Technology.name == needle,
+                )
+            )
+            matching = {pid for pid, in tech_res.all()}
+            connections = [c for c in connections if c.person_id in matching]
+    return [connection_to_dict(c) for c in connections]
+
+
+async def _verify_person_access(db: AsyncSession, owner_id: int, person_id: int) -> Person:
+    res = await db.execute(
+        select(Connection).options(selectinload(Connection.person))
+        .where(Connection.owner_id == owner_id, Connection.person_id == person_id)
+    )
+    conn = res.scalar_one_or_none()
+    if not conn:
+        raise HTTPException(status_code=403, detail="You are not tracking this person")
+    return conn.person
 
 
 @router.get("/people/{person_id}")
-async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db)):
-    person = await db.get(Person, person_id)
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
+async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db), owner: Owner = Depends(get_current_owner)):
+    person = await _verify_person_access(db, owner.id, person_id)
 
     res = await db.execute(
         select(Technology.name, PersonTechnology.confidence)
@@ -198,10 +230,14 @@ async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db)):
     )
     techs = [{"name": row.name, "confidence": row.confidence} for row in res.all()]
 
-    lookback = datetime.now(timezone.utc) - timedelta(days=ACTIVITY_LOOKBACK_DAYS)
+    _, _, start_dt, end_dt = get_period_bounds("30d")
     ev_res = await db.execute(
         select(ActivityEvent)
-        .where(ActivityEvent.person_id == person_id, ActivityEvent.occurred_at >= lookback)
+        .where(
+            ActivityEvent.person_id == person_id,
+            ActivityEvent.occurred_at >= start_dt,
+            ActivityEvent.occurred_at <= end_dt,
+        )
         .order_by(ActivityEvent.occurred_at.desc())
     )
     recent = ev_res.scalars().all()
@@ -228,10 +264,8 @@ async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/people/{person_id}/events")
-async def get_person_events(person_id: int, db: AsyncSession = Depends(get_db)):
-    person = await db.get(Person, person_id)
-    if not person:
-        raise HTTPException(status_code=404, detail="Person not found")
+async def get_person_events(person_id: int, db: AsyncSession = Depends(get_db), owner: Owner = Depends(get_current_owner)):
+    await _verify_person_access(db, owner.id, person_id)
 
     res = await db.execute(
         select(ActivityEvent)
@@ -242,15 +276,55 @@ async def get_person_events(person_id: int, db: AsyncSession = Depends(get_db)):
     return [event_to_dict(e) for e in res.scalars().all()]
 
 
-@router.get("/stats")
-async def get_stats(db: AsyncSession = Depends(get_db)):
-    people_count = await db.scalar(select(func.count()).select_from(Person))
-    events_count = await db.scalar(select(func.count()).select_from(ActivityEvent))
-    owners_count = await db.scalar(select(func.count()).select_from(Owner))
-    insights_count = await db.scalar(select(func.count()).select_from(Insight))
+@router.get("/me/stats")
+async def get_my_stats(
+    period: str = "7d",
+    db: AsyncSession = Depends(get_db),
+    owner: Owner = Depends(get_current_owner),
+):
+    res = await db.execute(select(Connection.person_id).where(Connection.owner_id == owner.id))
+    person_ids = [pid for pid, in res.all()]
+    
+    if not person_ids:
+        return {
+            "total_people_tracked": 0,
+            "total_events_collected": 0,
+            "total_insights": 0,
+            "events_this_period": 0,
+            "events_this_week": 0,
+        }
+
+    people_count = len(person_ids)
+
+    _, _, start_dt, end_dt = get_period_bounds(period)
+    period_count = 0
+    if person_ids:
+        week_res = await db.execute(
+            select(func.count())
+            .select_from(ActivityEvent)
+            .where(
+                ActivityEvent.person_id.in_(person_ids),
+                ActivityEvent.occurred_at >= start_dt,
+                ActivityEvent.occurred_at <= end_dt,
+            )
+        )
+        period_count = week_res.scalar() or 0
+
+    ev_count_res = await db.execute(
+        select(func.count()).select_from(ActivityEvent).where(ActivityEvent.person_id.in_(person_ids))
+    )
+    events_count = ev_count_res.scalar() or 0
+    
+    in_count_res = await db.execute(
+        select(func.count()).select_from(Insight).where(Insight.person_id.in_(person_ids))
+    )
+    insights_count = in_count_res.scalar() or 0
+    
     return {
-        "total_owners": owners_count or 0,
-        "total_people_tracked": people_count or 0,
-        "total_events_collected": events_count or 0,
-        "total_insights": insights_count or 0,
+        "total_people_tracked": people_count,
+        "total_events_collected": events_count,
+        "total_insights": insights_count,
+        "events_this_period": period_count,
+        "events_this_week": period_count,
+        "period": period,
     }

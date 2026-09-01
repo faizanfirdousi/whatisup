@@ -12,6 +12,7 @@ from app.db import Base
 from app.models import (  # noqa: F401
     Owner, Person, Connection, ActivityEvent,
     Technology, PersonTechnology, Insight, DigestDelivery,
+    PipelineRun, NetworkStory,
 )
 
 # Alembic Config object

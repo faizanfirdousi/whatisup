@@ -12,15 +12,19 @@ from app.models.technology import Technology, PersonTechnology
 from app.models.insight import Insight
 
 from app.github.collector import (
+    fetch_authenticated_following,
     fetch_user,
     fetch_following,
     fetch_public_events,
     fetch_repo_metadata,
 )
+from app.github.client import GitHubClient, GitHubRateLimitError
 from app.github.normalize import normalize_event
 from app.scoring.significance import score_event
 from app.scoring.technology import extract_technologies
-from app.narrative.generate import generate_weekly_narrative
+from app.narrative.generate import generate_weekly_narrative_enriched
+from app.config import get_settings
+from app.network.thresholds import COLLECT_STALE_SECONDS, NARRATE_LLM_MIN_SCORE
 
 logger = logging.getLogger(__name__)
 
@@ -89,24 +93,45 @@ async def _ensure_connection(
 
 
 async def seed_connections_for_owner(
-    session: AsyncSession, owner_id: int, github_username: str
+    session: AsyncSession,
+    owner_id: int,
+    github_username: str,
+    client: GitHubClient | None = None,
 ) -> dict:
     """Track the owner themselves plus everyone they follow. Does not commit."""
-    owner_user = await fetch_user(github_username)
-    owner_person = await get_or_create_person(session, owner_user)
-    await _ensure_connection(session, owner_id, owner_person, is_close=True)
+    own_client = client is None
+    client = client or GitHubClient()
+    try:
+        owner_user = await fetch_user(client, github_username)
+        owner_person = await get_or_create_person(session, owner_user)
+        await _ensure_connection(session, owner_id, owner_person, is_close=True)
 
-    following = await fetch_following(github_username)
-    for user in following:
-        person = await get_or_create_person(session, user)
-        await _ensure_connection(session, owner_id, person, is_close=False)
+        if client.token:
+            try:
+                following = await fetch_authenticated_following(client)
+            except Exception:
+                following = await fetch_following(client, github_username)
+        else:
+            following = await fetch_following(client, github_username)
+        for user in following:
+            person = await get_or_create_person(session, user)
+            await _ensure_connection(session, owner_id, person, is_close=False)
 
-    await session.flush()
-    return {
-        "owner_person_id": owner_person.id,
-        "following_count": len(following),
-        "tracked_including_self": len(following) + 1,
-    }
+        from app.models.owner import Owner
+
+        owner = await session.get(Owner, owner_id)
+        if owner:
+            owner.person_id = owner_person.id
+
+        await session.flush()
+        return {
+            "owner_person_id": owner_person.id,
+            "following_count": len(following),
+            "tracked_including_self": len(following) + 1,
+        }
+    finally:
+        if own_client:
+            await client.close()
 
 
 def _session_technology(session: AsyncSession, name: str) -> Technology | None:
@@ -159,6 +184,7 @@ async def _upsert_person_technologies(
             technology_id=tech_obj.id,
             confidence=t["confidence"],
             last_seen_at=now,
+            first_seen_at=now,
         )
         await session.execute(
             insert_stmt.on_conflict_do_update(
@@ -173,63 +199,130 @@ async def _upsert_person_technologies(
         )
 
 
-async def run_pipeline_for_person(
+async def _token_for_person(session: AsyncSession, person_id: int) -> str | None:
+    from app.models.owner import Owner
+    from app.auth.crypto import decrypt_token
+
+    res = await session.execute(
+        select(Owner)
+        .join(Connection, Connection.owner_id == Owner.id)
+        .where(
+            Connection.person_id == person_id,
+            Owner.is_active.is_(True),
+            Owner.encrypted_access_token.is_not(None),
+        )
+        .order_by(Owner.last_login_at.desc().nulls_last())
+        .limit(1)
+    )
+    owner = res.scalar_one_or_none()
+    if owner and owner.encrypted_access_token:
+        try:
+            return decrypt_token(owner.encrypted_access_token)
+        except Exception:
+            logger.warning("Could not decrypt token for owner %s", owner.id)
+    fallback = get_settings().github_token
+    return fallback or None
+
+
+async def _collect_for_person(
     session: AsyncSession,
     person_id: int,
     tech_cache: dict[str, Technology] | None = None,
+    client: GitHubClient | None = None,
 ) -> None:
+    """Collect events, score, and extract tech for one person. No narrative."""
     person = await session.get(Person, person_id)
     if not person:
         return
 
-    logger.info("Running pipeline for %s", person.github_username)
+    logger.info("Collecting events for %s", person.github_username)
     tech_cache = tech_cache if tech_cache is not None else {}
+    own_client = client is None
+    if client is None:
+        token = await _token_for_person(session, person.id)
+        if not token:
+            logger.info("Skipping %s — no owner token and no fallback PAT", person.github_username)
+            return
+        client = GitHubClient(token=token)
 
-    events_data = await fetch_public_events(person.github_username)
-    seen_repos: set[str] = set()
-
-    for raw_event in events_data:
-        norm = normalize_event(raw_event, person.id)
-        if not norm:
-            continue
-
-        result = await session.execute(
-            select(ActivityEvent).where(
-                ActivityEvent.source == norm["source"],
-                ActivityEvent.external_event_id == norm["external_event_id"],
-            )
+    try:
+        events_data, new_etag = await fetch_public_events(
+            client, person.github_username, etag=person.events_etag
         )
-        if result.scalar_one_or_none():
-            continue
+        if new_etag:
+            person.events_etag = new_etag
 
-        repo_name = norm["repo_full_name"]
-        if repo_name and repo_name not in seen_repos and "/" in repo_name:
-            owner_name, repo_only = repo_name.split("/", 1)
-            meta = await fetch_repo_metadata(owner_name, repo_only)
-            norm["metadata_"] = meta
-            seen_repos.add(repo_name)
-            await _upsert_person_technologies(
-                session, person.id, extract_technologies(meta), tech_cache
-            )
+        if not events_data:
+            logger.info("No new events for %s to process.", person.github_username)
+            await session.commit()
+            return
 
-        has_existing_repo = False
-        if norm["event_type"] == "repository_created":
-            res = await session.execute(
-                select(ActivityEvent)
-                .where(
-                    ActivityEvent.person_id == person.id,
-                    ActivityEvent.event_type == "repository_created",
+        seen_repos: set[str] = set()
+
+        for raw_event in events_data:
+            norm = normalize_event(raw_event, person.id)
+            if not norm:
+                continue
+
+            result = await session.execute(
+                select(ActivityEvent).where(
+                    ActivityEvent.source == norm["source"],
+                    ActivityEvent.external_event_id == norm["external_event_id"],
                 )
-                .limit(1)
             )
-            has_existing_repo = res.scalar_one_or_none() is not None
+            if result.scalar_one_or_none():
+                continue
 
-        norm["significance_score"] = score_event(
-            norm, build_score_context(norm, person, has_existing_repo)
-        )
-        session.add(ActivityEvent(**norm))
+            repo_name = norm["repo_full_name"]
+            meta: dict = dict(norm.get("metadata_") or {})
+            if repo_name and repo_name not in seen_repos and "/" in repo_name:
+                owner_name, repo_only = repo_name.split("/", 1)
+                meta = await fetch_repo_metadata(client, owner_name, repo_only)
+                seen_repos.add(repo_name)
+                await _upsert_person_technologies(
+                    session, person.id, extract_technologies(meta), tech_cache
+                )
 
-    await session.commit()
+            has_existing_repo = False
+            if norm["event_type"] == "repository_created":
+                res_repo = await session.execute(
+                    select(ActivityEvent)
+                    .where(
+                        ActivityEvent.person_id == person.id,
+                        ActivityEvent.event_type == "repository_created",
+                    )
+                    .limit(1)
+                )
+                has_existing_repo = res_repo.scalar_one_or_none() is not None
+
+            context = build_score_context(norm, person, has_existing_repo)
+            if context.get("is_external"):
+                meta["is_external"] = True
+            norm["metadata_"] = meta
+            norm["significance_score"] = score_event(norm, context)
+            session.add(ActivityEvent(**norm))
+
+        await session.commit()
+    finally:
+        if own_client:
+            await client.close()
+
+    logger.info("Finished collecting for %s", person.github_username)
+
+
+
+async def _narrate_for_person(
+    session: AsyncSession,
+    person_id: int,
+    tech_cache: dict[str, Technology] | None = None,
+) -> None:
+    """Generate weekly narrative for one person."""
+    person = await session.get(Person, person_id)
+    if not person:
+        return
+
+    logger.info("Generating narrative for %s", person.github_username)
+    tech_cache = tech_cache if tech_cache is not None else {}
 
     week_start, week_end, start_dt, end_dt = current_week_bounds()
     res = await session.execute(
@@ -281,10 +374,21 @@ async def run_pipeline_for_person(
         for e in week_events
     ]
 
-    narrative, event_ids, model = await generate_weekly_narrative(
-        person_dict, events_dicts, person_techs
-    )
     total_score = sum(e.significance_score for e in week_events)
+    skip_llm = total_score < NARRATE_LLM_MIN_SCORE
+    if skip_llm:
+        from app.narrative.template import template_narrative_enriched
+
+        enriched = template_narrative_enriched(person_dict, events_dicts, person_techs)
+    else:
+        enriched = await generate_weekly_narrative_enriched(
+            person_dict, events_dicts, person_techs
+        )
+
+    import json
+    narrative_json = json.dumps(enriched)
+    event_ids = enriched.get("supporting_event_ids", [])
+    model = enriched.get("model_used", "unknown")
 
     res = await session.execute(
         select(Insight).where(Insight.person_id == person.id, Insight.week_start == week_start)
@@ -293,7 +397,7 @@ async def run_pipeline_for_person(
     now = datetime.now(timezone.utc)
 
     if insight:
-        insight.narrative_text = narrative
+        insight.narrative_text = narrative_json
         insight.supporting_event_ids = event_ids
         insight.significance_total = total_score
         insight.model_used = model
@@ -304,7 +408,7 @@ async def run_pipeline_for_person(
                 person_id=person.id,
                 week_start=week_start,
                 week_end=week_end,
-                narrative_text=narrative,
+                narrative_text=narrative_json,
                 supporting_event_ids=event_ids,
                 significance_total=total_score,
                 model_used=model,
@@ -312,11 +416,159 @@ async def run_pipeline_for_person(
         )
 
     await session.commit()
-    logger.info("Finished pipeline for %s", person.github_username)
+    logger.info("Finished narrative for %s", person.github_username)
+
+
+async def run_pipeline_for_person(
+    session: AsyncSession,
+    person_id: int,
+    tech_cache: dict[str, Technology] | None = None,
+) -> None:
+    """Full pipeline: collect + narrate for one person. Kept for backward compatibility."""
+    await _collect_for_person(session, person_id, tech_cache)
+    await _narrate_for_person(session, person_id, tech_cache)
+
+
+async def _owner_token(owner) -> str | None:
+    from app.auth.crypto import decrypt_token
+
+    if owner.encrypted_access_token:
+        try:
+            return decrypt_token(owner.encrypted_access_token)
+        except Exception:
+            logger.warning("Could not decrypt token for owner %s", owner.id)
+    return get_settings().github_token or None
+
+
+def collect_is_stale(owner, now: datetime | None = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    started = owner.collect_in_progress_at
+    if started is None:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return (now - started).total_seconds() > COLLECT_STALE_SECONDS
+
+
+def owner_collect_allowed(owner, now: datetime | None = None) -> tuple[bool, str]:
+    now = now or datetime.now(timezone.utc)
+    if owner.collect_in_progress_at and not collect_is_stale(owner, now):
+        return False, "in_progress"
+    last = owner.last_collected_at
+    if last is not None:
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        min_interval = get_settings().collect_min_interval
+        if (now - last).total_seconds() < min_interval:
+            return False, "debounced"
+    return True, "ok"
+
+
+async def run_collect_for_owner(session: AsyncSession, owner_id: int) -> int:
+    """Collect this owner's network only. No narrate."""
+    from app.models.owner import Owner
+
+    owner = await session.get(Owner, owner_id)
+    if not owner:
+        return 0
+    token = await _owner_token(owner)
+    if not token:
+        logger.info("Owner %s has no GitHub token; skip collect", owner_id)
+        return 0
+
+    res = await session.execute(select(Connection.person_id).where(Connection.owner_id == owner_id))
+    person_ids = [pid for pid, in res.all()]
+    client = GitHubClient(token=token)
+    processed = 0
+    tech_cache: dict[str, Technology] = {}
+    try:
+        for person_id in person_ids:
+            try:
+                await _collect_for_person(session, person_id, tech_cache, client=client)
+                processed += 1
+            except GitHubRateLimitError:
+                logger.warning("Rate limit hit while collecting owner %s; stopping batch", owner_id)
+                break
+            except Exception:
+                logger.exception("Error collecting person %s for owner %s", person_id, owner_id)
+                await session.rollback()
+                tech_cache.clear()
+    finally:
+        await client.close()
+        owner = await session.get(Owner, owner_id)
+        if owner:
+            owner.last_collected_at = datetime.now(timezone.utc)
+            owner.collect_in_progress_at = None
+            await session.commit()
+    return processed
+
+
+async def run_collect(session: AsyncSession) -> int:
+    """Collect events for the union of people connected to active owners."""
+    from app.models.owner import Owner
+
+    res = await session.execute(select(Owner).where(Owner.is_active.is_(True)))
+    owners = list(res.scalars().all())
+    person_ids: set[int] = set()
+    for owner in owners:
+        conn_res = await session.execute(
+            select(Connection.person_id).where(Connection.owner_id == owner.id)
+        )
+        person_ids.update(pid for pid, in conn_res.all())
+
+    if not person_ids and get_settings().github_token:
+        res = await session.execute(select(Person.id))
+        person_ids = {pid for pid, in res.all()}
+
+    processed = 0
+    tech_cache: dict[str, Technology] = {}
+    for person_id in person_ids:
+        person = await session.get(Person, person_id)
+        username = person.github_username if person else person_id
+        try:
+            await _collect_for_person(session, person_id, tech_cache)
+            processed += 1
+        except GitHubRateLimitError:
+            logger.warning("Rate limit during global collect; continuing with remaining people")
+            tech_cache.clear()
+        except Exception:
+            logger.exception("Error collecting for %s", username)
+            await session.rollback()
+            tech_cache.clear()
+    return processed
+
+
+async def run_narrate(session: AsyncSession) -> int:
+    """Generate weekly person insights then per-owner network stories."""
+    from app.models.owner import Owner
+    from app.narrative.network_story import generate_network_story
+
+    res = await session.execute(select(Person.id, Person.github_username))
+    people = list(res.all())
+    processed = 0
+    tech_cache: dict[str, Technology] = {}
+    for person_id, username in people:
+        try:
+            await _narrate_for_person(session, person_id, tech_cache)
+            processed += 1
+        except Exception:
+            logger.exception("Error narrating for %s", username)
+            await session.rollback()
+            tech_cache.clear()
+
+    owners = await session.execute(select(Owner.id).where(Owner.is_active.is_(True)))
+    for owner_id, in owners.all():
+        try:
+            await generate_network_story(session, owner_id)
+            await session.commit()
+        except Exception:
+            logger.exception("Error generating network story for owner %s", owner_id)
+            await session.rollback()
+    return processed
 
 
 async def run_global_pipeline(session: AsyncSession) -> int:
-    """Run pipeline for all tracked people. Returns how many people were processed."""
+    """Run full pipeline (collect + narrate) for all tracked people. Returns how many people were processed."""
     res = await session.execute(select(Person.id, Person.github_username))
     people = list(res.all())
     processed = 0
@@ -330,3 +582,4 @@ async def run_global_pipeline(session: AsyncSession) -> int:
             await session.rollback()
             tech_cache.clear()
     return processed
+

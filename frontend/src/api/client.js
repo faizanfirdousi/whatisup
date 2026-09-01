@@ -2,8 +2,10 @@ const BASE_URL = '/api';
 const ADMIN_URL = '/admin';
 
 async function fetchApi(endpoint, options = {}) {
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
+  const prefix = endpoint.startsWith('/auth') ? '' : BASE_URL;
+  const response = await fetch(`${prefix}${endpoint}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,
@@ -11,6 +13,9 @@ async function fetchApi(endpoint, options = {}) {
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Unauthorized');
+    }
     let detail = `${response.status} ${response.statusText}`;
     try {
       const body = await response.json();
@@ -21,7 +26,14 @@ async function fetchApi(endpoint, options = {}) {
     throw new Error(detail);
   }
 
-  return response.json();
+  if (response.status === 204) return {};
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
 }
 
 async function fetchAdmin(endpoint, adminSecret, options = {}) {
@@ -31,6 +43,7 @@ async function fetchAdmin(endpoint, adminSecret, options = {}) {
   }
   const response = await fetch(`${ADMIN_URL}${endpoint}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       'X-Admin-Secret': secret,
@@ -49,22 +62,31 @@ async function fetchAdmin(endpoint, adminSecret, options = {}) {
     throw new Error(detail);
   }
 
-  return response.json();
+  const text = await response.text();
+  if (!text) return {};
+  return JSON.parse(text);
 }
 
 export const api = {
-  getOwners: () => fetchApi('/owners'),
-  getDigest: (ownerId) => fetchApi(`/owners/${ownerId}/digest`),
-  getConnections: (ownerId) => fetchApi(`/owners/${ownerId}/connections`),
+  getMe: () => fetchApi('/me'),
+  logout: () => fetchApi('/auth/logout', { method: 'POST' }),
+
+  getDigest: (period = '7d') => fetchApi(`/me/digest?period=${encodeURIComponent(period)}`),
+  getDigestV2: (period = '7d') => fetchApi(`/me/digest/v2?period=${encodeURIComponent(period)}`),
+  getConnections: (tech) => fetchApi(tech ? `/me/connections?tech=${encodeURIComponent(tech)}` : '/me/connections'),
   getPerson: (personId) => fetchApi(`/people/${personId}`),
   getPersonEvents: (personId) => fetchApi(`/people/${personId}/events`),
-  getStats: () => fetchApi('/stats'),
-
-  addOwner: (data, secret) => fetchAdmin('/owners', secret, { method: 'POST', body: JSON.stringify(data) }),
-  runPipeline: (secret) => fetchAdmin('/run-pipeline', secret, { method: 'POST' }),
-  toggleCloseCircle: (connectionId, isClose, secret) =>
-    fetchAdmin(`/connections/${connectionId}`, secret, {
+  getStats: (period = '7d') => fetchApi(`/me/stats?period=${encodeURIComponent(period)}`),
+  getSince: (period = '7d') => fetchApi(`/me/since?period=${encodeURIComponent(period)}`),
+  getHighlightsRefresh: (period = '7d') => fetchApi(`/me/highlights?refresh=1&period=${encodeURIComponent(period)}`),
+  getNetworkStory: () => fetchApi('/me/network-story'),
+  ackHighlights: (body) => fetchApi('/me/ack', { method: 'POST', body: JSON.stringify(body || { surface: 'dashboard' }) }),
+  collectNow: () => fetchApi('/me/collect', { method: 'POST' }),
+  toggleCloseCircle: (connectionId, isClose) =>
+    fetchApi(`/me/connections/${connectionId}`, {
       method: 'PATCH',
       body: JSON.stringify({ is_close: isClose }),
     }),
+
+  runPipeline: (secret) => fetchAdmin('/run-pipeline', secret, { method: 'POST' }),
 };
