@@ -37,4 +37,30 @@ def test_enriched_template_is_a_story_not_a_counter():
     assert "opened 1" not in enriched["narrative"].lower()
     assert "kserve" in enriched["narrative"].lower() or "python" in enriched["narrative"].lower()
     assert enriched["activity_type"] == "external_contribution"
-    assert enriched["why_it_matters"]
+    assert "external" in enriched["why_it_matters"].lower()
+
+
+def test_release_why_it_matters_is_release_specific():
+    enriched = template_narrative_enriched(
+        {"github_username": "alice", "display_name": "Alice"},
+        [
+            {
+                "id": 1,
+                "event_type": "release_published",
+                "repo_full_name": "alice/tool",
+                "significance_score": 12,
+                "metadata_": {"language": "go"},
+            },
+            {
+                "id": 2,
+                "event_type": "pull_request_opened",
+                "repo_full_name": "other/tool",
+                "significance_score": 8,
+                "metadata_": {"is_external": True},
+            },
+        ],
+        [{"name": "go", "confidence": 1.0}],
+    )
+    assert enriched["activity_type"] == "release"
+    assert "release" in enriched["why_it_matters"].lower()
+    assert "external contribution" not in enriched["why_it_matters"].lower()

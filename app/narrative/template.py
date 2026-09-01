@@ -166,26 +166,54 @@ def _generate_why_it_matters(
     activity_type: str,
     technologies: list[dict[str, Any]] | None,
 ) -> str | None:
-    """Generate a grounded 'why it matters' — only when there's real signal."""
+    """Generate a grounded 'why it matters' tied to the dominant activity type."""
     external_prs = [
-        e for e in events
+        e
+        for e in events
         if _event_type(e) in ("pull_request_opened", "pull_request_merged")
         and _is_external(e, person)
     ]
     releases = [e for e in events if _event_type(e) == "release_published"]
-    repos = set(_repo(e) for e in events if _repo(e))
+    repos = {_repo(e) for e in events if _repo(e)}
     tech_names = [t["name"] for t in (technologies or [])[:3] if t.get("name")]
 
-    if external_prs and len(external_prs) >= 2:
-        return f"Multiple external contributions suggest growing involvement in open-source projects."
-    if external_prs and tech_names:
-        return f"Contributing externally in the {tech_names[0]} ecosystem."
-    if releases and len(releases) >= 2:
-        return f"Multiple releases shipped — active project maintenance."
-    if len(repos) >= 4:
-        return f"Active across {len(repos)} repositories — broad engagement this period."
+    if activity_type == "release":
+        if len(releases) >= 2:
+            return (
+                "Multiple releases suggest active maintenance and iteration, "
+                "not just one-off experimentation."
+            )
+        return "A release usually means a project is moving into delivery or active upkeep."
+
     if activity_type == "new_project":
-        return "Starting something new."
+        return "A new repository often signals exploration into a fresh idea or problem space."
+
+    if activity_type == "external_contribution":
+        if len(external_prs) >= 2:
+            return (
+                "Several external contributions suggest deepening participation "
+                "in projects beyond their own repositories."
+            )
+        if tech_names:
+            return f"Contributing externally in {tech_names[0]} connects their work to a broader ecosystem."
+        return "External contributions show involvement outside their own repositories."
+
+    if activity_type == "deep_work":
+        if len(repos) == 1:
+            return "Sustained work in one repository suggests focused building rather than scattered activity."
+        if tech_names:
+            return f"Continued focus on {tech_names[0]} suggests deepening expertise in that area."
+        return "Focused pull request and review activity suggests sustained engineering work."
+
+    if activity_type == "exploration":
+        return "Activity across new repositories can signal experimentation or surveying new tools."
+
+    if len(repos) >= 4:
+        return f"Work spread across {len(repos)} repositories suggests broad engagement this period."
+
+    if tech_names:
+        return f"Repeated {tech_names[0]} activity suggests a sustained focus this period."
+
     return None
 
 

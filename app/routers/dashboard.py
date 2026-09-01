@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -12,6 +13,7 @@ from app.models.insight import Insight
 from app.models.technology import Technology, PersonTechnology
 from app.narrative.template import activity_digest
 from app.network.facts import get_period_bounds
+from app.network.journeys import build_monthly_phases, detect_milestones
 from app.serializers import owner_to_dict, insight_to_dict, event_to_dict, connection_to_dict
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -223,12 +225,18 @@ async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db), 
     person = await _verify_person_access(db, owner.id, person_id)
 
     res = await db.execute(
-        select(Technology.name, PersonTechnology.confidence)
+        select(Technology.name, PersonTechnology.confidence, PersonTechnology.first_seen_at)
         .join(PersonTechnology, PersonTechnology.technology_id == Technology.id)
         .where(PersonTechnology.person_id == person_id)
         .order_by(PersonTechnology.confidence.desc())
     )
-    techs = [{"name": row.name, "confidence": row.confidence} for row in res.all()]
+    techs = []
+    tech_first_seen: dict[str, date] = {}
+    for row in res.all():
+        techs.append({"name": row.name, "confidence": row.confidence})
+        if row.first_seen_at:
+            first = row.first_seen_at.date() if hasattr(row.first_seen_at, "date") else row.first_seen_at
+            tech_first_seen[row.name] = first
 
     _, _, start_dt, end_dt = get_period_bounds("30d")
     ev_res = await db.execute(
@@ -241,6 +249,22 @@ async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db), 
         .order_by(ActivityEvent.occurred_at.desc())
     )
     recent = ev_res.scalars().all()
+
+    journey_res = await db.execute(
+        select(ActivityEvent)
+        .where(ActivityEvent.person_id == person_id)
+        .order_by(ActivityEvent.occurred_at.asc())
+        .limit(500)
+    )
+    journey_events = list(journey_res.scalars().all())
+    journey = {
+        "phases": build_monthly_phases(journey_events, github_username=person.github_username),
+        "milestones": detect_milestones(
+            journey_events,
+            github_username=person.github_username,
+            tech_first_seen=tech_first_seen,
+        ),
+    }
 
     res_insight = await db.execute(
         select(Insight)
@@ -260,6 +284,7 @@ async def get_person_detail(person_id: int, db: AsyncSession = Depends(get_db), 
         "latest_insight": payload["latest_insight"],
         "event_count": payload["event_count"],
         "top_repos": payload["top_repos"],
+        "journey": journey,
     }
 
 

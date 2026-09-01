@@ -1,5 +1,5 @@
 import React from 'react';
-import { GitPullRequest, PackagePlus, Sparkles, Users } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { PeriodSelector } from './PeriodSelector';
 
 function timeGreeting(name) {
@@ -8,35 +8,35 @@ function timeGreeting(name) {
   return name ? `${part}, ${name}` : part;
 }
 
-function formatSummary(summary = {}) {
-  const meaningful = summary.meaningful_changes || 0;
-  const people = summary.people_count || 0;
-  if (!meaningful) {
-    return people ? `Your network of ${people} has been quiet` : 'Your developer network, summarized';
-  }
-  return `${meaningful} meaningful ${meaningful === 1 ? 'change' : 'changes'} across ${people} people`;
-}
-
 export function HeroBanner({ digest, period, onPeriodChange }) {
-  const summary = digest?.summary || {};
-  const peopleCount = summary.people_count
-    || (digest?.network_pulse
-      ? (digest.network_pulse.more_active || 0) + (digest.network_pulse.steady || 0) + (digest.network_pulse.quiet || 0)
-      : 0);
-  const displaySummary = { ...summary, people_count: peopleCount };
+  const hero = digest?.network_intelligence?.hero || {};
+  const signals = hero.signals || [];
 
   return (
     <section className="hero-banner">
       <div>
         <p className="eyebrow">{timeGreeting(digest?.owner_name)}</p>
-        <h1>{formatSummary(displaySummary)}</h1>
-        <p className="hero-kicker">What changed in your developer network.</p>
-        <div className="hero-stats" aria-label="Digest highlights">
-          <span><GitPullRequest size={16} /> {summary.people_shipped || 0} shipped something</span>
-          <span><PackagePlus size={16} /> {summary.new_projects || 0} new projects</span>
-          <span><Sparkles size={16} /> {summary.interesting_repos || 0} high-signal repos</span>
-          <span><Users size={16} /> {peopleCount} tracked</span>
-        </div>
+        <h1>{hero.headline || "What's changing in your network"}</h1>
+        <p className="hero-kicker">{hero.subhead}</p>
+        {signals.length > 0 && (
+          <div className="hero-signals" aria-label="Network signals">
+            {signals.map((signal) => {
+              const href = signal.direction === 'cluster' || signal.name === 'open-source'
+                ? '/network'
+                : `/network?tech=${encodeURIComponent(signal.name)}`;
+              return (
+                <Link
+                  key={`${signal.name}:${signal.direction}`}
+                  to={href}
+                  className={`signal-chip signal-${signal.direction || 'steady'}`}
+                  title={signal.description}
+                >
+                  {signal.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </div>
       <PeriodSelector value={period} onChange={onPeriodChange} />
     </section>

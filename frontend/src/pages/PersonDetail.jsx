@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { Loader } from '../components/Loader';
 import { InsightCard } from '../components/InsightCard';
 import { EventTimeline } from '../components/EventTimeline';
+import { DeveloperJourney } from '../components/DeveloperJourney';
 import { TechBadge } from '../components/TechBadge';
 
 export function PersonDetail() {
@@ -43,6 +44,14 @@ export function PersonDetail() {
             ))
           )}
         </div>
+      </section>
+
+      <section style={{ marginBottom: '2rem' }}>
+        <h2 style={{ marginBottom: '1rem' }}>Developer journey</h2>
+        <DeveloperJourney
+          phases={person.journey?.phases}
+          milestones={person.journey?.milestones}
+        />
       </section>
 
       <section style={{ marginBottom: '2rem' }}>

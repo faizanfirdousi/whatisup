@@ -14,7 +14,14 @@ from app.models.network_story import NetworkStory
 from app.models.owner import Owner
 from app.narrative.network_story import template_network_story
 from app.network.facts import all_person_ids_from_facts, compute_network_facts, get_period_bounds
-from app.pipeline import current_week_bounds, owner_collect_allowed, run_collect_for_owner
+from app.pipeline import (
+    current_week_bounds,
+    owner_collect_allowed,
+    run_collect_for_owner,
+    seed_connections_for_owner,
+    _owner_token,
+)
+from app.github.client import GitHubClient
 from app.scoring.since import compute_since_items, default_since
 
 logger = logging.getLogger(__name__)
@@ -115,6 +122,51 @@ async def get_highlights(
     if started:
         payload["collecting"] = True
     return payload
+
+
+@router.post("/me/sync-following")
+async def post_sync_following(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    owner: Owner = Depends(get_current_owner),
+):
+    """Re-fetch GitHub following and add any new people to this owner's network."""
+    token = await _owner_token(owner)
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="No GitHub token available. Sign in again with GitHub OAuth.",
+        )
+
+    before_res = await db.execute(select(Connection).where(Connection.owner_id == owner.id))
+    tracked_before = len(before_res.scalars().all())
+
+    client = GitHubClient(token=token)
+    try:
+        seed_info = await seed_connections_for_owner(
+            db, owner.id, owner.github_username, client=client
+        )
+    except Exception as exc:
+        logger.exception("Failed to sync following for owner %s", owner.id)
+        raise HTTPException(status_code=502, detail="Could not fetch following from GitHub") from exc
+    finally:
+        await client.close()
+
+    await db.commit()
+
+    after_res = await db.execute(select(Connection).where(Connection.owner_id == owner.id))
+    tracked_after = len(after_res.scalars().all())
+
+    collect_started = await _maybe_start_collect(db, owner, background_tasks)
+
+    return {
+        "status": "success",
+        "tracked_before": tracked_before,
+        "tracked_after": tracked_after,
+        "added": max(0, tracked_after - tracked_before),
+        "following_count": seed_info.get("following_count"),
+        "collecting": collect_started or owner.collect_in_progress_at is not None,
+    }
 
 
 @router.post("/me/collect")

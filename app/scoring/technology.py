@@ -1,21 +1,25 @@
 from typing import Any
 
+from app.scoring.canonical import canonical_key, display_name
+
+
 def extract_technologies(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     """
     Extract technologies from repository metadata.
     Returns a list of dicts: {"name": str, "confidence": float}
+    Names are canonical keys for grouping; use display_name() for UI.
     """
     technologies = []
     
     # 1. Direct language mapping
     language = metadata.get("language")
     if language:
-        technologies.append({"name": language.strip().lower(), "confidence": 1.0})
+        technologies.append({"name": canonical_key(language.strip()), "confidence": 1.0})
         
     # 2. Topic tags
     topics = metadata.get("topics", [])
     for topic in topics:
-        name = topic.strip().lower()
+        name = canonical_key(topic.strip())
         if name:
             technologies.append({"name": name, "confidence": 1.0})
         

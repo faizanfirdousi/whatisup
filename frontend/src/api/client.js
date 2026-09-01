@@ -82,6 +82,7 @@ export const api = {
   getNetworkStory: () => fetchApi('/me/network-story'),
   ackHighlights: (body) => fetchApi('/me/ack', { method: 'POST', body: JSON.stringify(body || { surface: 'dashboard' }) }),
   collectNow: () => fetchApi('/me/collect', { method: 'POST' }),
+  syncFollowing: () => fetchApi('/me/sync-following', { method: 'POST' }),
   toggleCloseCircle: (connectionId, isClose) =>
     fetchApi(`/me/connections/${connectionId}`, {
       method: 'PATCH',

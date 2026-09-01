@@ -104,12 +104,98 @@ def test_digest_v2_uses_stories_not_raw_scores():
     )
 
     assert "significance_total" not in payload
-    assert payload["summary"]["people_shipped"] == 1
-    assert payload["summary"]["meaningful_changes"] == 2
+    assert "summary" not in payload
+    assert payload["network_intelligence"]["hero"]["headline"]
     assert len(payload["stories"]) == 2
     assert all("significance_total" not in story for story in payload["stories"])
-    headlines = " ".join(story["headline"] for story in payload["stories"]).lower()
-    assert "alice" in headlines or "atharva" in headlines
     assert payload["close_circle"][0]["person"]["github_username"] == "alice"
-    assert payload["network_pulse"]["network_size"] == 2
+    assert payload["close_circle"][0]["current_focus"]
     assert {row["person"]["id"] for row in payload["people"]} == {1, 2}
+
+
+def test_digest_excludes_owner_from_stories_and_close_circle():
+    facts = facts_from_loaded(
+        week_start=date(2026, 8, 27),
+        week_end=date(2026, 9, 2),
+        owner_person_id=99,
+        connections=[
+            {"person_id": 99, "is_close": True},
+            {"person_id": 2, "is_close": False},
+        ],
+        week_events=[
+            {
+                "id": 1,
+                "person_id": 99,
+                "event_type": "pull_request_opened",
+                "repo_full_name": "kserve/kserve",
+                "metadata_": {"is_external": True, "language": "go"},
+            },
+            {
+                "id": 2,
+                "person_id": 2,
+                "event_type": "release_published",
+                "repo_full_name": "other/app",
+                "metadata_": {"language": "python"},
+            },
+        ],
+        prior_events=[],
+        usernames={99: "faizan", 2: "friend"},
+        tech_this_week={"go": {99}, "python": {2}},
+        first_seen_by_person_tech={},
+        tech_seen_before_week=set(),
+    )
+    facts["owner_person_id"] = 99
+    payload = build_digest_payload(
+        owner_name="Faizan",
+        period="7d",
+        rows=[
+            {
+                "connection_id": 1,
+                "is_close": True,
+                "person": {
+                    "id": 99,
+                    "github_username": "faizan",
+                    "display_name": "Faizan",
+                    "avatar_url": None,
+                },
+                "events": [
+                    _event(
+                        99,
+                        event_type="pull_request_opened",
+                        repo_full_name="kserve/kserve",
+                        significance_score=10,
+                        metadata_={"is_external": True, "language": "go"},
+                    )
+                ],
+                "insight": None,
+            },
+            {
+                "connection_id": 2,
+                "is_close": False,
+                "person": {
+                    "id": 2,
+                    "github_username": "friend",
+                    "display_name": "Friend",
+                    "avatar_url": None,
+                },
+                "events": [
+                    _event(
+                        2,
+                        event_type="release_published",
+                        repo_full_name="other/app",
+                        significance_score=12,
+                    )
+                ],
+                "insight": None,
+            },
+        ],
+        facts=facts,
+    )
+
+    story_ids = {s["person"]["id"] for s in payload["stories"]}
+    close_ids = {c["person"]["id"] for c in payload["close_circle"]}
+
+    assert 99 not in story_ids
+    assert 99 not in close_ids
+    assert payload["your_direction"] is not None
+    assert payload["your_direction"]["person_id"] == 99

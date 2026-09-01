@@ -7,8 +7,9 @@ import { Loader } from '../components/Loader';
 import { HeroBanner } from '../components/HeroBanner';
 import { StoryCard } from '../components/StoryCard';
 import { CloseCircleCard } from '../components/CloseCircleCard';
-import { NetworkPulse } from '../components/NetworkPulse';
-import { EmergingPatterns } from '../components/EmergingPatterns';
+import { YourRecentDirection } from '../components/YourRecentDirection';
+import { NetworkStorySection } from '../components/NetworkStorySection';
+import { ForYouSection } from '../components/ForYouSection';
 
 function readPeriod() {
   const stored = localStorage.getItem('whatisup:period');
@@ -45,8 +46,11 @@ export function Dashboard() {
     }
   }, [highlights?.collecting, refetchHighlights]);
 
-  const stories = useMemo(() => (digest?.stories || []).slice(0, 5), [digest]);
+  const stories = useMemo(() => digest?.stories || [], [digest]);
   const closeCircle = digest?.close_circle || [];
+  const yourDirection = digest?.your_direction;
+  const intelligence = digest?.network_intelligence || {};
+  const hasContent = stories.length > 0 || (intelligence?.story?.stories || []).length > 0;
 
   if (loading) return <Loader />;
 
@@ -58,9 +62,12 @@ export function Dashboard() {
     <div className="dashboard-v2">
       <HeroBanner digest={digest} period={period} onPeriodChange={setPeriod} />
 
-      {highlights?.collecting && (
+      {highlights?.collecting && !hasContent && (
         <div className="collecting-banner">Collecting your network. New activity will appear here shortly.</div>
       )}
+
+      <NetworkStorySection intelligence={intelligence} />
+      <ForYouSection intelligence={intelligence} />
 
       <section className="dashboard-section">
         <div className="section-heading">
@@ -80,23 +87,20 @@ export function Dashboard() {
         )}
       </section>
 
-      <section className="dashboard-section">
-        <div className="section-heading">
-          <h2>Close circle</h2>
-        </div>
-        {closeCircle.length === 0 ? (
-          <div className="glass-panel empty-panel">No close-circle people yet. Mark them from Network.</div>
-        ) : (
+      <YourRecentDirection direction={yourDirection} />
+
+      {closeCircle.length > 0 && (
+        <section className="dashboard-section">
+          <div className="section-heading">
+            <h2>Close circle</h2>
+          </div>
           <div className="close-circle-grid">
             {closeCircle.map((item) => (
               <CloseCircleCard key={item.person.id} item={item} />
             ))}
           </div>
-        )}
-      </section>
-
-      <NetworkPulse pulse={digest?.network_pulse} />
-      <EmergingPatterns patterns={digest?.emerging} />
+        </section>
+      )}
 
       <footer className="dashboard-footer">
         <Link to="/network">Explore full network <ArrowUpRight size={16} /></Link>

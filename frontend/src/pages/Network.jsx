@@ -23,6 +23,7 @@ export function Network() {
   const [period, setPeriod] = useState(readPeriod);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
+  const [syncing, setSyncing] = useState(false);
   const { data: digest, loading, error, refetch } = useApi(api.getDigestV2, [period]);
   const { data: story } = useApi(api.getNetworkStory, []);
 
@@ -59,6 +60,30 @@ export function Network() {
     }
   };
 
+  const syncFollowing = async () => {
+    try {
+      setSyncing(true);
+      setStatus('Syncing your GitHub following list...');
+      const result = await api.syncFollowing();
+      if (result.added > 0) {
+        setStatus(
+          `Added ${result.added} new ${result.added === 1 ? 'person' : 'people'}. `
+          + `${result.collecting ? 'Collecting their activity now.' : 'Collect will start shortly.'}`,
+        );
+      } else {
+        setStatus(
+          `Already up to date (${result.tracked_after} tracked).`
+          + (result.collecting ? ' Refreshing activity.' : ''),
+        );
+      }
+      refetch();
+    } catch (err) {
+      setStatus(err.message);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   if (loading) return <Loader />;
   if (error) {
     return <div className="glass-panel" style={{ padding: '2rem' }}>Could not load network: {error}</div>;
@@ -74,7 +99,17 @@ export function Network() {
             {tech ? ` · filtered to ${tech}` : '. Home only shows the strongest stories.'}
           </p>
         </div>
-        <PeriodSelector value={period} onChange={setPeriod} />
+        <div className="network-header-actions">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={syncFollowing}
+            disabled={syncing}
+          >
+            {syncing ? 'Syncing...' : 'Sync GitHub following'}
+          </button>
+          <PeriodSelector value={period} onChange={setPeriod} />
+        </div>
       </header>
 
       <NetworkStory story={story} />

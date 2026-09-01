@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowDownRight, ArrowUpRight, GitBranch, Package, Rocket, Search, Wrench } from 'lucide-react';
+import { ArrowUpRight, GitBranch, Package, Rocket, Search, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TechBadge } from './TechBadge';
 
@@ -12,19 +12,6 @@ const ACTIVITY = {
   routine: { label: 'Active', icon: Wrench },
 };
 
-function TrendMark({ trend }) {
-  if (!trend?.direction || trend.direction === 'steady') return null;
-  const up = trend.direction === 'up';
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
-  const pct = Number.isFinite(trend.change_pct) ? Math.abs(trend.change_pct) : null;
-  return (
-    <span className={`trend-mark trend-${trend.direction}`}>
-      <Icon size={14} />
-      {pct != null ? `${pct}% vs prior` : up ? 'More active' : 'Quieter'}
-    </span>
-  );
-}
-
 export function StoryCard({ story }) {
   const person = story.person || {};
   const activity = ACTIVITY[story.activity_type] || ACTIVITY.routine;
@@ -33,13 +20,10 @@ export function StoryCard({ story }) {
   return (
     <article className="story-card">
       <div className="story-card-top">
-        <div className="story-card-meta">
-          <span className={`badge activity-badge activity-${story.activity_type || 'routine'}`}>
-            <Icon size={14} />
-            {activity.label}
-          </span>
-          <TrendMark trend={story.trend} />
-        </div>
+        <span className={`badge activity-badge activity-${story.activity_type || 'routine'}`}>
+          <Icon size={14} />
+          {activity.label}
+        </span>
         <img
           src={person.avatar_url || `https://github.com/${person.github_username}.png`}
           alt={person.github_username}
@@ -49,7 +33,7 @@ export function StoryCard({ story }) {
       <p className="story-summary">{story.summary}</p>
       {(story.technologies || []).length > 0 && (
         <div className="story-techs">
-          {story.technologies.slice(0, 5).map((tech) => (
+          {story.technologies.map((tech) => (
             <TechBadge key={tech} name={tech} />
           ))}
         </div>
@@ -59,6 +43,9 @@ export function StoryCard({ story }) {
           <span>Why it matters</span>
           <p>{story.why_it_matters}</p>
         </div>
+      )}
+      {story.personal_note && (
+        <p className="personal-note">{story.personal_note}</p>
       )}
       <Link to={`/person/${person.id}`} className="story-link">
         View person <ArrowUpRight size={16} />

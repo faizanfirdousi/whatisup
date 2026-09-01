@@ -14,13 +14,18 @@ from app.models.owner import Owner
 from app.models.person import Person
 from app.narrative.template import template_narrative_enriched
 from app.network.facts import compute_network_facts, get_period_bounds
+from app.network.intelligence import build_network_intelligence, infer_focus
+from app.network.feed_selection import primary_tech, repo_ecosystem, select_diverse_stories
+from app.network.interestingness import compute_interestingness, personal_note
+from app.scoring.canonical import canonical_key, display_name
 from app.scoring.technology import extract_technologies
 from app.serializers import insight_to_dict
 
 router = APIRouter(prefix="/api", tags=["digest_v2"])
 
 MEANINGFUL_MIN = 5
-STORY_LIMIT = 8
+STORY_LIMIT = 5
+FEED_STORY_LIMIT = 5
 
 
 def _insight_covers_period(insight: Insight | None, start: date, end: date) -> bool:
@@ -76,65 +81,18 @@ def _activity_level(facts: dict, person_id: int) -> str:
 
 
 def _network_pulse(facts: dict) -> dict:
+    """Kept for the Network explore page — not shown on the homepage."""
     pulse = facts.get("people_by_activity_level") or {}
-    top_techs = []
-    for row in facts.get("tech_this_week") or []:
-        top_techs.append(
-            {
-                "name": row["name"],
-                "people_count": len(row.get("person_ids") or []),
-                "direction": "steady",
-            }
-        )
-    rising = {row["name"] for row in facts.get("rising") or []}
-    for tech in top_techs:
-        if tech["name"] in rising:
-            tech["direction"] = "up"
-    for row in facts.get("declining") or []:
-        top_techs.append({"name": row["name"], "people_count": 0, "direction": "down"})
-    top_techs.sort(key=lambda item: item["people_count"], reverse=True)
     return {
         "more_active": len(pulse.get("more_active") or []),
         "steady": len(pulse.get("steady") or []),
         "quiet": len(pulse.get("quiet") or []),
-        "top_technologies": top_techs[:5],
         "network_size": facts.get("network_size") or 0,
     }
 
 
-def _emerging(facts: dict) -> list[dict]:
-    emerging = []
-    for row in facts.get("rising") or []:
-        emerging.append(
-            {
-                "type": "tech_cluster",
-                "headline": f"{row['name'].capitalize()} is becoming more common across your network",
-                "technologies": [row["name"]],
-                "people_count": row["this_week_people"],
-            }
-        )
-    for row in facts.get("new_in_network") or []:
-        emerging.append(
-            {
-                "type": "tech_cluster",
-                "headline": f"{row['name'].capitalize()} is new in your network",
-                "technologies": [row["name"]],
-                "people_count": len(row.get("person_ids") or []),
-            }
-        )
-    for row in facts.get("shared_repos") or []:
-        emerging.append(
-            {
-                "type": "shared_repo",
-                "headline": f"{row['people_count']} people interacted with {row['repo']}",
-                "repo": row["repo"],
-                "people_count": row["people_count"],
-            }
-        )
-    return emerging[:5]
-
-
 def _story_rank(activity_type: str, meaningful: int, event_count: int) -> int:
+    """Legacy significance-only rank — kept for tests; prefer interestingness.total."""
     type_bonus = {
         "release": 40,
         "new_project": 35,
@@ -146,21 +104,84 @@ def _story_rank(activity_type: str, meaningful: int, event_count: int) -> int:
     return meaningful * 12 + type_bonus + min(event_count, 8)
 
 
+def _owner_context(rows: list[dict], facts: dict) -> tuple[set[str], str | None, dict | None]:
+    owner_id = facts.get("owner_person_id")
+    if not owner_id:
+        return set(), None, None
+    for row in rows:
+        if row["person"]["id"] != owner_id:
+            continue
+        events = row.get("events") or []
+        techs = {t["name"] for t in _techs_from_events(events)}
+        stored = row.get("insight") or {}
+        focus = stored.get("focus_area")
+        if not focus and events:
+            enriched = template_narrative_enriched(
+                row["person"], _event_dicts(events), _techs_from_events(events)
+            )
+            focus = enriched.get("focus_area")
+        repos = sorted({e.repo_full_name for e in events if e.repo_full_name})[:4]
+        snapshot = {
+            "person": row["person"],
+            "technologies": list(techs),
+            "recent_repos": repos,
+            "focus": focus,
+        }
+        return techs, focus, snapshot
+    return set(), None, None
+
+
+def _build_your_direction(
+    snapshot: dict | None,
+    *,
+    owner_techs: set[str],
+    owner_focus: str | None,
+    intelligence: dict,
+) -> dict | None:
+    if not snapshot and not owner_techs and not owner_focus:
+        return None
+
+    for_you = intelligence.get("for_you") or {}
+    similar = for_you.get("similar_people") or []
+    overlap = None
+    if len(similar) >= 2:
+        overlap = f"{len(similar)} people you follow are moving in related areas"
+    elif for_you.get("direction", {}).get("summary"):
+        overlap = for_you["direction"]["summary"]
+
+    tech_keys = owner_techs or set(snapshot.get("technologies") or []) if snapshot else owner_techs
+    tech_labels = [display_name(t) for t in sorted(tech_keys)[:6]]
+    repos = (snapshot or {}).get("recent_repos") or []
+    person = (snapshot or {}).get("person") or {}
+
+    if not tech_labels and not repos and not overlap and not owner_focus:
+        return None
+
+    return {
+        "person_id": person.get("id"),
+        "technologies": tech_labels,
+        "recent_repos": repos,
+        "focus": owner_focus or (snapshot or {}).get("focus"),
+        "network_overlap": overlap,
+    }
+
+
 def build_digest_payload(
     *,
     owner_name: str,
     period: str,
     rows: list[dict],
     facts: dict,
+    usernames: dict[int, str] | None = None,
 ) -> dict:
     """Assemble digest v2 from already-loaded person rows. Used by the route and tests."""
     stories = []
     close_circle = []
     people = []
-    people_shipped_ids: set[int] = set()
-    new_projects = 0
-    interesting_repos: set[str] = set()
-    meaningful_changes = 0
+    usernames = usernames or {row["person"]["id"]: row["person"]["github_username"] for row in rows}
+    owner_id = facts.get("owner_person_id")
+    owner_techs, owner_focus, owner_snapshot = _owner_context(rows, facts)
+    network_rising = {canonical_key(row["name"]) for row in facts.get("rising") or []}
 
     for row in rows:
         person = row["person"]
@@ -168,14 +189,6 @@ def build_digest_payload(
         person_id = person["id"]
         person_meaningful = sum(1 for event in events if (event.significance_score or 0) >= MEANINGFUL_MIN)
         person_repos = {event.repo_full_name for event in events if event.repo_full_name}
-        meaningful_changes += person_meaningful
-        for event in events:
-            if event.event_type == "release_published":
-                people_shipped_ids.add(person_id)
-            if event.event_type == "repository_created":
-                new_projects += 1
-            if event.repo_full_name and (event.significance_score or 0) >= MEANINGFUL_MIN:
-                interesting_repos.add(event.repo_full_name)
 
         techs = _techs_from_events(events)
         enriched = template_narrative_enriched(person, _event_dicts(events), techs)
@@ -216,16 +229,40 @@ def build_digest_payload(
                 "technologies": technologies[:5],
             }
         )
-        if row["is_close"]:
+        if row["is_close"] and person_id != owner_id:
             close_circle.append(
                 {
                     "person": person_payload,
-                    "current_focus": focus,
+                    "current_focus": infer_focus(
+                        focus,
+                        technologies[:3],
+                        list(person_repos)[:3],
+                    ),
+                    "recent_change": headline if person_meaningful > 0 else None,
                     "meaningful_changes": person_meaningful,
                     "active_repos": list(person_repos)[:3],
+                    "technologies": technologies[:3],
                 }
             )
-        if events:
+        if events and person_id != owner_id:
+            trend = (facts.get("activity_direction") or {}).get(person_id, {})
+            interest = compute_interestingness(
+                activity_type=activity_type,
+                meaningful_changes=person_meaningful,
+                technologies=technologies,
+                is_close=row["is_close"],
+                owner_techs=owner_techs,
+                network_rising=network_rising,
+                trend_direction=trend.get("direction"),
+                has_why=bool(why),
+            )
+            tech_display = [display_name(t) for t in technologies[:4]]
+            tech_keys = [canonical_key(t) for t in technologies]
+            repos = list(person_repos)
+            note = personal_note(technologies=technologies, owner_techs=owner_techs)
+            is_tech_shift = trend.get("direction") == "up" and bool(
+                set(tech_keys) & network_rising
+            )
             stories.append(
                 {
                     "id": f"story:person:{person_id}",
@@ -233,17 +270,20 @@ def build_digest_payload(
                     "headline": headline,
                     "summary": summary,
                     "why_it_matters": why,
+                    "personal_note": note,
                     "person": person_payload,
-                    "technologies": technologies[:5],
+                    "technologies": tech_display,
                     "activity_type": activity_type,
-                    "rank": _story_rank(activity_type, person_meaningful, len(events)),
-                    "trend": trend,
+                    "rank": interest["total"],
+                    "relevance": interest["relevance"],
+                    "primary_tech": primary_tech(technologies),
+                    "repo_ecosystem": repo_ecosystem(repos),
+                    "is_tech_shift": is_tech_shift,
                     "meaningful_changes": person_meaningful,
                 }
             )
 
-    stories.sort(key=lambda item: item["rank"], reverse=True)
-    strong_types = {"release", "new_project", "external_contribution", "deep_work"}
+    strong_types = {"release", "new_project", "external_contribution", "deep_work", "exploration"}
     editorial = [
         story
         for story in stories
@@ -251,24 +291,36 @@ def build_digest_payload(
         or story.get("why_it_matters")
         or (story.get("meaningful_changes") or 0) > 0
     ]
-    selected = (editorial or stories)[:STORY_LIMIT]
+    selected = select_diverse_stories(editorial or stories, limit=FEED_STORY_LIMIT)
+    close_circle = [
+        item
+        for item in close_circle
+        if item.get("meaningful_changes", 0) > 0 or item.get("recent_change")
+    ]
     close_circle.sort(key=lambda item: item["meaningful_changes"], reverse=True)
     pulse = _network_pulse(facts)
+    intelligence = build_network_intelligence(
+        facts,
+        usernames=usernames,
+        owner_techs=owner_techs,
+        owner_focus=owner_focus,
+        close_people=close_circle,
+    )
+    your_direction = _build_your_direction(
+        owner_snapshot,
+        owner_techs=owner_techs,
+        owner_focus=owner_focus,
+        intelligence=intelligence,
+    )
     return {
         "owner_name": owner_name,
         "greeting": f"Hello, {owner_name}" if owner_name else "Hello",
         "period": period,
-        "summary": {
-            "meaningful_changes": meaningful_changes,
-            "people_shipped": len(people_shipped_ids),
-            "new_projects": new_projects,
-            "interesting_repos": len(interesting_repos),
-            "people_count": pulse["network_size"],
-        },
+        "network_intelligence": intelligence,
         "stories": selected,
-        "close_circle": close_circle,
+        "your_direction": your_direction,
+        "close_circle": close_circle[:6],
         "network_pulse": pulse,
-        "emerging": _emerging(facts),
         "people": people,
     }
 
@@ -304,6 +356,7 @@ async def get_my_digest_v2(
             events_by_person.setdefault(event.person_id, []).append(event)
 
     facts = await compute_network_facts(db, owner.id, period=period)
+    facts["owner_person_id"] = owner.person_id
     rows = []
     for conn in connections:
         person = conn.person
@@ -328,5 +381,15 @@ async def get_my_digest_v2(
             }
         )
 
+    usernames = {
+        conn.person.id: conn.person.github_username for conn in connections
+    }
+
     name = owner.label or owner.github_username or "there"
-    return build_digest_payload(owner_name=name, period=period, rows=rows, facts=facts)
+    return build_digest_payload(
+        owner_name=name,
+        period=period,
+        rows=rows,
+        facts=facts,
+        usernames=usernames,
+    )
