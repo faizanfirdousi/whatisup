@@ -1,6 +1,40 @@
 # WhatIsUp
 
-Hosted GitHub-network pulse: sign in with GitHub, see what changed since you last looked, then a grounded story of your network.
+A personal intelligence layer for your GitHub network. Sign in with GitHub, see what changed since you last looked, and get a grounded story of what your people are building.
+
+## What it does
+
+WhatIsUp watches the developers you follow on GitHub — not a firehose of every commit, but the signal that matters: new repos, releases, deep work streaks, tech shifts, and cross-network patterns. It scores activity for significance, deduplicates noise, and turns the week into readable narratives: per-person insights and a network-level story.
+
+You mark highlights as read when you are caught up; the dashboard stays anchored to *since you last looked*.
+
+## Architecture
+
+```
+GitHub OAuth + API
+       │
+       ▼
+  collect pipeline ──► Postgres (people, connections, events, technologies, insights)
+       │
+       ▼
+  narrate pipeline ──► LLM stories (OpenRouter) + template fallbacks
+       │
+       ▼
+  FastAPI (:8000) ◄──► React/Vite SPA (dev :5173, prod Vercel)
+```
+
+| Layer | Stack |
+|-------|-------|
+| API | FastAPI, SQLAlchemy async, Alembic |
+| Frontend | React, Vite |
+| Data | PostgreSQL |
+| Auth | GitHub OAuth, encrypted token storage, signed session cookies |
+| Intelligence | Significance scoring, tech extraction, network facts, feed selection |
+| Narrative | Weekly LLM generation with grounded evidence; template paths when LLM is off |
+
+**Backend layout:** `app/github/` collects and normalizes events; `app/scoring/` ranks significance and extracts technologies; `app/network/` builds facts, clusters, and feed selection; `app/narrative/` generates person insights and network stories; `app/pipeline.py` orchestrates collect and narrate phases.
+
+**Pipeline runs outside the web process** — triggered by cron or a visit with `?refresh=1` (15-minute debounce). The API serves reads and auth; collection and narration are batch jobs.
 
 ## Local development
 
