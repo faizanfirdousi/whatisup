@@ -1,0 +1,20 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://34.195.104.6.sslip.io/api/:path*"
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "https://34.195.104.6.sslip.io/auth/:path*"
+    },
+    {
+      "source": "/admin/:path*",
+      "destination": "https://34.195.104.6.sslip.io/admin/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://34.195.104.6.sslip.io/health"
+    }
+  ]
+}
