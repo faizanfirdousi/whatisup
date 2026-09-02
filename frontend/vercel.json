@@ -9,12 +9,28 @@
       "destination": "https://34.195.104.6.sslip.io/auth/:path*"
     },
     {
-      "source": "/admin/:path*",
-      "destination": "https://34.195.104.6.sslip.io/admin/:path*"
-    },
-    {
       "source": "/health",
       "destination": "https://34.195.104.6.sslip.io/health"
+    },
+    {
+      "source": "/admin/run-pipeline",
+      "destination": "https://34.195.104.6.sslip.io/admin/run-pipeline"
+    },
+    {
+      "source": "/admin/owners",
+      "destination": "https://34.195.104.6.sslip.io/admin/owners"
+    },
+    {
+      "source": "/admin/backfill-canonical-tech",
+      "destination": "https://34.195.104.6.sslip.io/admin/backfill-canonical-tech"
+    },
+    {
+      "source": "/admin/connections/:id",
+      "destination": "https://34.195.104.6.sslip.io/admin/connections/:id"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
