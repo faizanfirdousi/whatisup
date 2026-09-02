@@ -1,7 +1,23 @@
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.auth.github import authorize_url
 from app.main import app
+
+
+def test_authorize_url_includes_state():
+    parsed = urlparse(authorize_url("csrf-token-value"))
+    query = parse_qs(parsed.query)
+    assert query.get("state") == ["csrf-token-value"]
+
+
+@pytest.mark.asyncio
+async def test_github_callback_rejects_missing_state():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        response = await ac.get("/auth/github/callback", params={"code": "attacker-code"})
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio

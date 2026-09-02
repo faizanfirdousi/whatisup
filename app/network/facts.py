@@ -359,8 +359,12 @@ async def compute_network_facts(
     week_events: list[ActivityEvent] = []
     prior_events: list[ActivityEvent] = []
     if person_ids:
+        from sqlalchemy.orm import defer
+
         ev_res = await session.execute(
-            select(ActivityEvent).where(
+            select(ActivityEvent)
+            .options(defer(ActivityEvent.raw_payload))
+            .where(
                 ActivityEvent.person_id.in_(person_ids),
                 ActivityEvent.occurred_at >= prior_start,
                 ActivityEvent.occurred_at <= end_dt,
@@ -379,62 +383,67 @@ async def compute_network_facts(
 
     first_seen_by_person_tech: dict[tuple[int, str], date] = {}
     tech_seen_before_week: set[str] = set()
-    pt_res = await session.execute(
-        select(PersonTechnology, Technology.name).join(
-            Technology, Technology.id == PersonTechnology.technology_id
-        )
-    )
-    for pt, name in pt_res.all():
-        first = pt.first_seen_at or pt.last_seen_at
-        first_date = first.date() if isinstance(first, datetime) else first
-        first_seen_by_person_tech[(pt.person_id, name)] = first_date
-        if first_date < week_start:
-            tech_seen_before_week.add(name)
-        if person_ids and pt.person_id in person_ids and start_dt <= pt.last_seen_at <= end_dt:
-            tech_this_week[name].add(pt.person_id)
-
-    # Keep only the first external PR this week per person, and only if they had none before.
-    earlier_external: set[int] = set()
     if person_ids:
+        pt_res = await session.execute(
+            select(PersonTechnology, Technology.name)
+            .join(Technology, Technology.id == PersonTechnology.technology_id)
+            .where(PersonTechnology.person_id.in_(person_ids))
+        )
+        for pt, name in pt_res.all():
+            first = pt.first_seen_at or pt.last_seen_at
+            first_date = first.date() if isinstance(first, datetime) else first
+            first_seen_by_person_tech[(pt.person_id, name)] = first_date
+            if first_date < week_start:
+                tech_seen_before_week.add(name)
+            if start_dt <= pt.last_seen_at <= end_dt:
+                tech_this_week[name].add(pt.person_id)
+
+    pr_types = ("pull_request_opened", "pull_request_merged")
+    pr_people = {ev.person_id for ev in week_events if ev.event_type in pr_types}
+    earlier_external: set[int] = set()
+    if pr_people:
         hist = await session.execute(
-            select(ActivityEvent, Person.github_username)
+            select(
+                ActivityEvent.person_id,
+                ActivityEvent.repo_full_name,
+                ActivityEvent.metadata_,
+                Person.github_username,
+            )
             .join(Person, Person.id == ActivityEvent.person_id)
             .where(
-                ActivityEvent.person_id.in_(person_ids),
-                ActivityEvent.event_type.in_(("pull_request_opened", "pull_request_merged")),
+                ActivityEvent.person_id.in_(pr_people),
+                ActivityEvent.event_type.in_(pr_types),
                 ActivityEvent.occurred_at < start_dt,
             )
         )
-        for ev, username in hist.all():
+
+        class _Hist:
+            __slots__ = ("person_id", "repo_full_name", "metadata_")
+
+            def __init__(self, person_id, repo_full_name, metadata_):
+                self.person_id = person_id
+                self.repo_full_name = repo_full_name
+                self.metadata_ = metadata_
+
+        for person_id, repo, meta, username in hist.all():
+            if person_id in earlier_external:
+                continue
+            ev = _Hist(person_id, repo, meta)
             if event_is_external(ev, username):
-                earlier_external.add(ev.person_id)
+                earlier_external.add(person_id)
 
     first_week_external = []
     seen_person: set[int] = set()
     for ev in sorted(week_events, key=lambda e: e.occurred_at):
         if ev.person_id in earlier_external or ev.person_id in seen_person:
             continue
-        if ev.event_type not in ("pull_request_opened", "pull_request_merged"):
+        if ev.event_type not in pr_types:
             continue
         if event_is_external(ev, usernames.get(ev.person_id, "")):
             first_week_external.append(ev)
             seen_person.add(ev.person_id)
 
     facts = facts_from_loaded(
-        week_start=week_start,
-        week_end=week_end,
-        owner_person_id=owner_person_id,
-        connections=connections,
-        week_events=first_week_external,  # only used for first_external_oss in this call
-        prior_events=prior_events,
-        usernames=usernames,
-        tech_this_week=tech_this_week,
-        first_seen_by_person_tech=first_seen_by_person_tech,
-        tech_seen_before_week=tech_seen_before_week,
-        period_days=period_days,
-    )
-    # Recompute activity/event counts from the full week event list (not the first-external subset).
-    activity = facts_from_loaded(
         week_start=week_start,
         week_end=week_end,
         owner_person_id=owner_person_id,
@@ -447,12 +456,6 @@ async def compute_network_facts(
         tech_seen_before_week=tech_seen_before_week,
         period_days=period_days,
     )
-    facts["active_person_ids"] = activity["active_person_ids"]
-    facts["quiet_close_person_ids"] = activity["quiet_close_person_ids"]
-    facts["event_type_counts"] = activity["event_type_counts"]
-    facts["shared_repos"] = activity["shared_repos"]
-    facts["activity_direction"] = activity["activity_direction"]
-    facts["people_by_activity_level"] = activity["people_by_activity_level"]
     facts["first_external_oss"] = [
         {"person_id": ev.person_id, "event_id": ev.id, "repo": ev.repo_full_name or ""}
         for ev in first_week_external

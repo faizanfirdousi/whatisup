@@ -95,6 +95,15 @@ async def _ensure_connection(
         existing.is_close = True
 
 
+def _apply_github_profile(person: Person, github_user: dict) -> None:
+    person.github_username = github_user["login"]
+    if github_user.get("name"):
+        person.display_name = github_user.get("name")
+    if github_user.get("avatar_url"):
+        person.avatar_url = github_user.get("avatar_url")
+    person.profile_last_synced_at = datetime.now(timezone.utc)
+
+
 async def seed_connections_for_owner(
     session: AsyncSession,
     owner_id: int,
@@ -106,9 +115,6 @@ async def seed_connections_for_owner(
     client = client or GitHubClient()
     try:
         owner_user = await fetch_user(client, github_username)
-        owner_person = await get_or_create_person(session, owner_user)
-        await _ensure_connection(session, owner_id, owner_person, is_close=True)
-
         if client.token:
             try:
                 following = await fetch_authenticated_following(client)
@@ -116,9 +122,50 @@ async def seed_connections_for_owner(
                 following = await fetch_following(client, github_username)
         else:
             following = await fetch_following(client, github_username)
-        for user in following:
-            person = await get_or_create_person(session, user)
-            await _ensure_connection(session, owner_id, person, is_close=False)
+
+        profiles = [owner_user] + following
+        github_ids = [user["id"] for user in profiles]
+        existing = (
+            await session.execute(select(Person).where(Person.github_id.in_(github_ids)))
+        ).scalars().all()
+        by_github_id = {person.github_id: person for person in existing}
+
+        for user in profiles:
+            person = by_github_id.get(user["id"])
+            if person is None:
+                person = Person(
+                    github_id=user["id"],
+                    github_username=user["login"],
+                    display_name=user.get("name"),
+                    avatar_url=user.get("avatar_url"),
+                    profile_last_synced_at=datetime.now(timezone.utc),
+                )
+                session.add(person)
+                by_github_id[user["id"]] = person
+            else:
+                _apply_github_profile(person, user)
+
+        await session.flush()
+        owner_person = by_github_id[owner_user["id"]]
+        person_ids = [by_github_id[user["id"]].id for user in profiles]
+        existing_conns = (
+            await session.execute(
+                select(Connection).where(
+                    Connection.owner_id == owner_id,
+                    Connection.person_id.in_(person_ids),
+                )
+            )
+        ).scalars().all()
+        by_person_id = {conn.person_id: conn for conn in existing_conns}
+
+        for user in profiles:
+            person = by_github_id[user["id"]]
+            is_close = person.id == owner_person.id
+            conn = by_person_id.get(person.id)
+            if conn is None:
+                session.add(Connection(owner_id=owner_id, person_id=person.id, is_close=is_close))
+            elif is_close and not conn.is_close:
+                conn.is_close = True
 
         from app.models.owner import Owner
 
@@ -357,9 +404,13 @@ async def _narrate_for_person(
     logger.info("Generating narrative for %s", person.github_username)
     tech_cache = tech_cache if tech_cache is not None else {}
 
+    from sqlalchemy.orm import undefer
+
     week_start, week_end, start_dt, end_dt = current_week_bounds()
     res = await session.execute(
-        select(ActivityEvent).where(
+        select(ActivityEvent)
+        .options(undefer(ActivityEvent.raw_payload))
+        .where(
             ActivityEvent.person_id == person.id,
             ActivityEvent.occurred_at >= start_dt,
             ActivityEvent.occurred_at <= end_dt,
@@ -372,6 +423,7 @@ async def _narrate_for_person(
         lookback = datetime.now(timezone.utc) - timedelta(days=14)
         res = await session.execute(
             select(ActivityEvent)
+            .options(undefer(ActivityEvent.raw_payload))
             .where(
                 ActivityEvent.person_id == person.id,
                 ActivityEvent.occurred_at >= lookback,

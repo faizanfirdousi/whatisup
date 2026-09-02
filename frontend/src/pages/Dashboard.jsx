@@ -8,11 +8,13 @@ import { StoryCard } from '../components/StoryCard';
 import { CloseCircleCard } from '../components/CloseCircleCard';
 import { NetworkStorySection } from '../components/NetworkStorySection';
 import { readStoredPeriod } from '../period';
+import { useAuth } from '../hooks/useAuth';
 
 export function Dashboard() {
+  const { user } = useAuth();
   const [period, setPeriod] = useState(readStoredPeriod);
-  const { data: digest, loading, error } = useApi(api.getDigestV2, [period]);
-  const { data: highlights, refetch: refetchHighlights } = useApi(api.getHighlightsRefresh, [period]);
+  const [collecting, setCollecting] = useState(Boolean(user?.collecting));
+  const { data: digest, loading, error, refetch } = useApi(api.getDigestV2, [period]);
 
   useEffect(() => {
     let acked = false;
@@ -33,11 +35,31 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (highlights?.collecting) {
-      const t = setTimeout(() => refetchHighlights(), 3000);
-      return () => clearTimeout(t);
-    }
-  }, [highlights?.collecting, refetchHighlights]);
+    let cancelled = false;
+    api.collectNow()
+      .then((res) => {
+        if (!cancelled && res?.collecting) setCollecting(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!collecting) return undefined;
+    const t = setTimeout(async () => {
+      try {
+        const me = await api.getMe();
+        const still = Boolean(me.collecting);
+        setCollecting(still);
+        if (!still) refetch();
+      } catch {
+        setCollecting(false);
+      }
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [collecting, refetch]);
 
   const stories = useMemo(() => digest?.stories || [], [digest]);
   const closeCircle = digest?.close_circle || [];
@@ -54,7 +76,7 @@ export function Dashboard() {
     <div className="dashboard-v2">
       <HeroBanner digest={digest} period={period} onPeriodChange={setPeriod} />
 
-      {highlights?.collecting && !hasContent && (
+      {collecting && !hasContent && (
         <div className="collecting-banner">Collecting your network. New activity will appear here shortly.</div>
       )}
 

@@ -31,5 +31,5 @@ class Owner(Base):
     last_collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     collect_in_progress_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Relationships
-    connections = relationship("Connection", back_populates="owner", lazy="selectin")
+    # Relationships — noload so GET /api/me does not pull the whole network
+    connections = relationship("Connection", back_populates="owner", lazy="noload")

@@ -2,7 +2,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,7 @@ from app.pipeline import (
 )
 from app.github.client import GitHubClient
 from app.scoring.since import compute_since_items, default_since
+from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["me"])
@@ -125,7 +126,9 @@ async def get_highlights(
 
 
 @router.post("/me/sync-following")
+@limiter.limit("5/minute")
 async def post_sync_following(
+    request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
@@ -170,7 +173,9 @@ async def post_sync_following(
 
 
 @router.post("/me/collect")
+@limiter.limit("5/minute")
 async def post_collect(
+    request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),

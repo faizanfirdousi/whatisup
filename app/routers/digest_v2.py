@@ -1,9 +1,9 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from app.auth.session import get_current_owner
 from app.db import get_db
@@ -11,7 +11,6 @@ from app.models.activity_event import ActivityEvent
 from app.models.connection import Connection
 from app.models.insight import Insight
 from app.models.owner import Owner
-from app.models.person import Person
 from app.narrative.template import template_narrative_enriched
 from app.narrative.contributions import build_contribution_digest, evidence_detail, usable_focus_area
 from app.network.facts import compute_network_facts, get_period_bounds
@@ -25,6 +24,7 @@ from app.network.interestingness import compute_interestingness, personal_note
 from app.scoring.canonical import canonical_key, display_name
 from app.scoring.technology import extract_technologies
 from app.serializers import insight_to_dict
+from app.rate_limit import limiter
 
 router = APIRouter(prefix="/api", tags=["digest_v2"])
 
@@ -104,7 +104,6 @@ def _event_dicts(events: list[ActivityEvent]) -> list[dict]:
             "repo_full_name": event.repo_full_name,
             "significance_score": event.significance_score,
             "metadata_": event.metadata_,
-            "raw_payload": getattr(event, "raw_payload", None) or {},
         }
         for event in events
     ]
@@ -379,7 +378,9 @@ def build_digest_payload(
 
 
 @router.get("/me/digest/v2")
+@limiter.limit("20/minute")
 async def get_my_digest_v2(
+    request: Request,
     period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
@@ -388,16 +389,18 @@ async def get_my_digest_v2(
 
     res = await db.execute(
         select(Connection)
-        .options(selectinload(Connection.person).selectinload(Person.insights))
+        .options(selectinload(Connection.person))
         .where(Connection.owner_id == owner.id)
     )
     connections = res.scalars().all()
     person_ids = [conn.person_id for conn in connections]
 
     events_by_person: dict[int, list[ActivityEvent]] = {pid: [] for pid in person_ids}
+    latest_by_person: dict[int, Insight] = {}
     if person_ids:
         ev_res = await db.execute(
             select(ActivityEvent)
+            .options(defer(ActivityEvent.raw_payload))
             .where(
                 ActivityEvent.person_id.in_(person_ids),
                 ActivityEvent.occurred_at >= start_dt,
@@ -408,14 +411,20 @@ async def get_my_digest_v2(
         for event in ev_res.scalars().all():
             events_by_person.setdefault(event.person_id, []).append(event)
 
+        ins_res = await db.execute(
+            select(Insight)
+            .distinct(Insight.person_id)
+            .where(Insight.person_id.in_(person_ids))
+            .order_by(Insight.person_id, Insight.week_start.desc())
+        )
+        latest_by_person = {insight.person_id: insight for insight in ins_res.scalars().all()}
+
     facts = await compute_network_facts(db, owner.id, period=period)
     facts["owner_person_id"] = owner.person_id
     rows = []
     for conn in connections:
         person = conn.person
-        latest = None
-        if person.insights:
-            latest = sorted(person.insights, key=lambda insight: insight.week_start, reverse=True)[0]
+        latest = latest_by_person.get(person.id)
         stored = None
         if _insight_is_usable(latest) and _insight_covers_period(latest, week_start, week_end):
             stored = insight_to_dict(latest)

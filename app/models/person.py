@@ -21,6 +21,6 @@ class Person(Base):
     )
 
     # Relationships
-    connections = relationship("Connection", back_populates="person", lazy="selectin")
+    connections = relationship("Connection", back_populates="person", lazy="noload")
     activity_events = relationship("ActivityEvent", back_populates="person", lazy="noload")
     insights = relationship("Insight", back_populates="person", lazy="noload")

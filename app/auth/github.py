@@ -10,13 +10,14 @@ def oauth_callback_url() -> str:
     return f"{get_settings().public_app_url.rstrip('/')}/auth/github/callback"
 
 
-def authorize_url() -> str:
+def authorize_url(state: str) -> str:
     settings = get_settings()
     query = urlencode(
         {
             "client_id": settings.github_client_id,
             "redirect_uri": oauth_callback_url(),
             "scope": OAUTH_SCOPES,
+            "state": state,
         }
     )
     return f"{GITHUB_AUTHORIZE}?{query}"

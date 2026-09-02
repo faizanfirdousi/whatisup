@@ -3,8 +3,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
+from app.rate_limit import limiter
 from app.routers import admin, auth, dashboard, health, internal, me, digest_v2
 
 logging.basicConfig(
@@ -26,11 +29,14 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 settings = get_settings()
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "https://whatisupp.vercel.app",
     settings.frontend_origin,
 ]
 if settings.chrome_extension_origin:
@@ -40,8 +46,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[o for o in origins if o],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["Content-Type", "Accept", "X-Admin-Secret", "X-Cron-Secret"],
 )
 
 app.include_router(health.router)

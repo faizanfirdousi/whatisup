@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from datetime import date
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -107,9 +107,12 @@ def _person_payload(person: Person, *, is_close: bool, insight: Insight | None, 
 
 
 from app.auth.session import get_current_owner
+from app.rate_limit import limiter
 
 @router.get("/me/digest")
+@limiter.limit("20/minute")
 async def get_my_digest(
+    request: Request,
     period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),

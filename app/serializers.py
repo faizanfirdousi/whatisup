@@ -5,6 +5,7 @@ from app.models.activity_event import ActivityEvent
 from app.models.connection import Connection
 from app.models.insight import Insight
 from app.models.owner import Owner
+from app.models.person import Person
 from app.narrative.contributions import usable_focus_area
 
 

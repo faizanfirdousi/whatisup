@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from app.models.owner import Owner
 from app.models.connection import Connection
 from app.pipeline import seed_connections_for_owner, run_global_pipeline
 from app.github.client import GitHubClient
+from app.rate_limit import limiter
 from app.serializers import owner_to_dict
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,10 @@ class OwnerCreate(BaseModel):
 
 
 @router.post("/owners", dependencies=[Depends(verify_admin_secret)])
-async def create_owner(owner_in: OwnerCreate, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def create_owner(
+    request: Request, owner_in: OwnerCreate, db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(
         select(Owner).where(Owner.github_username == owner_in.github_username)
     )
@@ -90,8 +94,12 @@ class ConnectionUpdate(BaseModel):
 
 
 @router.patch("/connections/{connection_id}", dependencies=[Depends(verify_admin_secret)])
+@limiter.limit("30/minute")
 async def update_connection(
-    connection_id: int, update: ConnectionUpdate, db: AsyncSession = Depends(get_db)
+    request: Request,
+    connection_id: int,
+    update: ConnectionUpdate,
+    db: AsyncSession = Depends(get_db),
 ):
     conn = await db.get(Connection, connection_id)
     if not conn:
@@ -102,7 +110,8 @@ async def update_connection(
 
 
 @router.post("/backfill-canonical-tech", dependencies=[Depends(verify_admin_secret)])
-async def backfill_canonical_tech(db: AsyncSession = Depends(get_db)):
+@limiter.limit("2/minute")
+async def backfill_canonical_tech(request: Request, db: AsyncSession = Depends(get_db)):
     from app.scoring.canonical_backfill import backfill_canonical_technologies
 
     stats = await backfill_canonical_technologies(db)
@@ -111,6 +120,7 @@ async def backfill_canonical_tech(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/run-pipeline", dependencies=[Depends(verify_admin_secret)])
-async def trigger_pipeline(db: AsyncSession = Depends(get_db)):
+@limiter.limit("2/minute")
+async def trigger_pipeline(request: Request, db: AsyncSession = Depends(get_db)):
     processed = await run_global_pipeline(db)
     return {"status": "success", "people_processed": processed}

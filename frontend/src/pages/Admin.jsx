@@ -1,22 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../api/client';
 
 export function Admin() {
   const { user } = useAuth();
-  const [secret, setSecret] = useState(() => localStorage.getItem('whatisup_admin_secret') || '');
+  const [secret, setSecret] = useState('');
   const [status, setStatus] = useState('');
   const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    localStorage.removeItem('whatisup_admin_secret');
+  }, []);
 
   if (user && !user.is_builder) {
     return <Navigate to="/" replace />;
   }
-
-  const persistSecret = (value) => {
-    setSecret(value);
-    localStorage.setItem('whatisup_admin_secret', value);
-  };
 
   const handleRunPipeline = async () => {
     if (!secret) return setStatus('ADMIN_SECRET required to run the full pipeline');
@@ -48,7 +47,7 @@ export function Admin() {
             type="password"
             placeholder="ADMIN_SECRET from .env"
             value={secret}
-            onChange={(e) => persistSecret(e.target.value)}
+            onChange={(e) => setSecret(e.target.value)}
             style={{
               width: '100%', padding: '0.75rem', borderRadius: 'var(--radius-md)',
               background: 'rgba(0,0,0,0.2)', border: '1px solid var(--glass-border)',

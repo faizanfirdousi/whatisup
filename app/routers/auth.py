@@ -1,36 +1,98 @@
+import hmac
 import logging
+import secrets
 from datetime import datetime, timezone
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.crypto import encrypt_token
+from app.auth.crypto import decrypt_token, encrypt_token
 from app.auth.github import authorize_url
-from app.auth.session import SESSION_COOKIE, SESSION_MAX_AGE, dump_session
+from app.auth.session import (
+    SESSION_COOKIE,
+    apply_oauth_state_cookie,
+    apply_session_cookie,
+    clear_oauth_state_cookie,
+    clear_session_cookie,
+    create_session,
+    load_oauth_state,
+    revoke_session_cookie,
+    OAUTH_STATE_COOKIE,
+)
 from app.config import get_settings
-from app.db import get_db
+from app.db import async_session, get_db
 from app.github.client import GitHubClient
 from app.models.owner import Owner
-from app.pipeline import seed_connections_for_owner
+from app.pipeline import run_collect_for_owner, seed_connections_for_owner
+from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
 
 
+async def _seed_then_collect(owner_id: int, github_username: str) -> None:
+    async with async_session() as session:
+        try:
+            owner = await session.get(Owner, owner_id)
+            if not owner or not owner.encrypted_access_token:
+                if owner:
+                    owner.collect_in_progress_at = None
+                    await session.commit()
+                return
+            token = decrypt_token(owner.encrypted_access_token)
+            client = GitHubClient(token=token)
+            try:
+                await seed_connections_for_owner(session, owner_id, github_username, client=client)
+                await session.commit()
+            finally:
+                await client.close()
+            await run_collect_for_owner(session, owner_id)
+            owner = await session.get(Owner, owner_id)
+            if owner and owner.collect_in_progress_at is not None:
+                owner.collect_in_progress_at = None
+                await session.commit()
+        except Exception:
+            logger.exception("Failed to seed/collect after login for owner %s", owner_id)
+            owner = await session.get(Owner, owner_id)
+            if owner:
+                owner.collect_in_progress_at = None
+                await session.commit()
+
+
+def _oauth_state_valid(query_state: str | None, cookie_state: str | None) -> bool:
+    if not query_state or not cookie_state:
+        return False
+    return hmac.compare_digest(query_state, cookie_state)
+
+
 @router.get("/auth/github")
-async def github_login():
+@limiter.limit("10/minute")
+async def github_login(request: Request):
     settings = get_settings()
     if not settings.github_client_id:
         raise HTTPException(status_code=500, detail="GitHub Client ID not configured")
-    return RedirectResponse(authorize_url())
+    state = secrets.token_urlsafe(32)
+    response = RedirectResponse(authorize_url(state))
+    apply_oauth_state_cookie(response, state)
+    return response
 
 
 @router.get("/auth/github/callback")
-async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def github_callback(
+    request: Request,
+    code: str,
+    background_tasks: BackgroundTasks,
+    state: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
     settings = get_settings()
+    stored = load_oauth_state(request.cookies.get(OAUTH_STATE_COOKIE) or "")
+    if not _oauth_state_valid(state, stored):
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -46,7 +108,11 @@ async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
         data = resp.json()
 
     if "error" in data:
-        logger.error("GitHub OAuth error: %s", data)
+        logger.error(
+            "GitHub OAuth error: %s - %s",
+            data.get("error"),
+            data.get("error_description"),
+        )
         raise HTTPException(status_code=400, detail=data.get("error_description", "OAuth failed"))
 
     access_token = data.get("access_token")
@@ -89,40 +155,25 @@ async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
         db.add(owner)
         await db.flush()
 
-    if first_login or not owner.person_id:
-        try:
-            client = GitHubClient(token=access_token)
-            try:
-                await seed_connections_for_owner(db, owner.id, login, client=client)
-            finally:
-                await client.close()
-        except Exception:
-            logger.exception("Failed to seed following for %s", login)
+    needs_seed = first_login or not owner.person_id
+    if needs_seed:
+        owner.collect_in_progress_at = now
 
+    session_token = await create_session(db, owner.id)
     await db.commit()
+    if needs_seed:
+        background_tasks.add_task(_seed_then_collect, owner.id, login)
 
     response = RedirectResponse(url=settings.frontend_origin)
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=dump_session(owner.id),
-        httponly=True,
-        samesite="lax",
-        secure=settings.cookie_secure,
-        max_age=SESSION_MAX_AGE,
-        path="/",
-    )
+    apply_session_cookie(response, session_token)
+    clear_oauth_state_cookie(response)
     return response
 
 
 @router.post("/auth/logout")
-async def logout():
-    settings = get_settings()
+@limiter.limit("20/minute")
+async def logout(request: Request, db: AsyncSession = Depends(get_db)):
+    await revoke_session_cookie(db, request.cookies.get(SESSION_COOKIE))
     response = Response(status_code=204)
-    response.delete_cookie(
-        key=SESSION_COOKIE,
-        path="/",
-        samesite="lax",
-        secure=settings.cookie_secure,
-        httponly=True,
-    )
+    clear_session_cookie(response)
     return response

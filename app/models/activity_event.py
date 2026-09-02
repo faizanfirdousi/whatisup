@@ -18,7 +18,7 @@ class ActivityEvent(Base):
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     repo_full_name: Mapped[str | None] = mapped_column(String, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, deferred=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     significance_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     ingested_at: Mapped[datetime] = mapped_column(

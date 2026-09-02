@@ -7,6 +7,7 @@ from app.models.insight import Insight
 from app.models.digest_delivery import DigestDelivery
 from app.models.pipeline_run import PipelineRun
 from app.models.network_story import NetworkStory
+from app.models.auth_session import AuthSession
 
 __all__ = [
     "Owner",
@@ -19,5 +20,6 @@ __all__ = [
     "DigestDelivery",
     "PipelineRun",
     "NetworkStory",
+    "AuthSession",
 ]
 

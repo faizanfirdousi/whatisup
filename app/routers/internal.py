@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.db import async_session
 from app.models.pipeline_run import PipelineRun
 from app.pipeline import run_collect, run_narrate
+from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -67,6 +68,7 @@ async def _run_pipeline_task(run_id: int, phase: str) -> None:
 
 
 @router.post("/run-pipeline")
+@limiter.limit("5/minute")
 async def trigger_pipeline(
     request: Request,
     background_tasks: BackgroundTasks,
