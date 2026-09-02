@@ -40,3 +40,8 @@ htmlcov/
 
 # Docker
 pgdata/
+
+# Local markdown notes; keep README files tracked
+*.md
+!README.md
+!**/README.md
