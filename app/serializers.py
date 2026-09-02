@@ -5,7 +5,7 @@ from app.models.activity_event import ActivityEvent
 from app.models.connection import Connection
 from app.models.insight import Insight
 from app.models.owner import Owner
-from app.models.person import Person
+from app.narrative.contributions import usable_focus_area
 
 
 def _iso(value: date | datetime | None) -> str | None:
@@ -47,7 +47,7 @@ def insight_to_dict(insight: Insight | None) -> dict[str, Any] | None:
         "narrative_text": enriched.get("narrative", text),
         "headline": enriched.get("headline"),
         "why_it_matters": enriched.get("why_it_matters"),
-        "focus_area": enriched.get("focus_area"),
+        "focus_area": usable_focus_area(enriched.get("focus_area")),
         "activity_type": enriched.get("activity_type", "routine"),
         "technologies_mentioned": enriched.get("technologies_mentioned", []),
         "supporting_event_ids": insight.supporting_event_ids,

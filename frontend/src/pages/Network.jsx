@@ -150,9 +150,7 @@ export function Network() {
                       </div>
                     </div>
                     {row.headline && <p className="network-headline">{row.headline}</p>}
-                    {row.current_focus && (
-                      <p className="network-focus">Focused on {row.current_focus}</p>
-                    )}
+                    {row.detail && <p className="network-focus">{row.detail}</p>}
                     <button
                       className={row.is_close ? 'btn btn-primary' : 'btn btn-secondary'}
                       onClick={() => toggle(row)}

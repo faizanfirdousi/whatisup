@@ -205,3 +205,73 @@ def test_digest_excludes_owner_from_stories_and_close_circle():
     assert 99 not in close_ids
     assert payload["your_direction"] is not None
     assert payload["your_direction"]["person_id"] == 99
+
+
+def test_digest_drops_repo_tagline_focus_and_shows_pr_title():
+    facts = facts_from_loaded(
+        week_start=date(2026, 8, 27),
+        week_end=date(2026, 9, 2),
+        owner_person_id=99,
+        connections=[{"person_id": 1, "is_close": True}],
+        week_events=[
+            {
+                "id": 1,
+                "person_id": 1,
+                "event_type": "pull_request_opened",
+                "repo_full_name": "nousresearch/hermes-agent",
+                "metadata_": {
+                    "is_external": True,
+                    "language": "python",
+                    "description": "The agent that grows with you",
+                    "titles": ["Add memory tool for long chats"],
+                },
+            }
+        ],
+        prior_events=[],
+        usernames={1: "benawad"},
+        tech_this_week={"python": {1}},
+        first_seen_by_person_tech={},
+        tech_seen_before_week=set(),
+    )
+    payload = build_digest_payload(
+        owner_name="Faizan",
+        period="7d",
+        rows=[
+            {
+                "connection_id": 10,
+                "is_close": True,
+                "person": {
+                    "id": 1,
+                    "github_username": "benawad",
+                    "display_name": "Ben",
+                    "avatar_url": None,
+                },
+                "events": [
+                    _event(
+                        1,
+                        event_type="pull_request_opened",
+                        repo_full_name="nousresearch/hermes-agent",
+                        significance_score=10,
+                        metadata_={
+                            "is_external": True,
+                            "language": "python",
+                            "description": "The agent that grows with you",
+                            "titles": ["Add memory tool for long chats"],
+                        },
+                    )
+                ],
+                "insight": {
+                    "headline": "Contributed to hermes-agent",
+                    "focus_area": "The agent that grows with you",
+                    "narrative_text": "Ben contributed to nousresearch/hermes-agent.",
+                    "activity_type": "external_contribution",
+                    "technologies_mentioned": ["python"],
+                },
+            }
+        ],
+        facts=facts,
+    )
+    row = payload["people"][0]
+    assert row["current_focus"] is None
+    assert row["detail"] == "Add memory tool for long chats"
+    assert "grows with you" not in (row["headline"] or "")

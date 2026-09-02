@@ -13,6 +13,7 @@ from app.models.insight import Insight
 from app.models.owner import Owner
 from app.models.person import Person
 from app.narrative.template import template_narrative_enriched
+from app.narrative.contributions import build_contribution_digest, evidence_detail, usable_focus_area
 from app.network.facts import compute_network_facts, get_period_bounds
 from app.network.intelligence import (
     build_network_intelligence,
@@ -103,6 +104,7 @@ def _event_dicts(events: list[ActivityEvent]) -> list[dict]:
             "repo_full_name": event.repo_full_name,
             "significance_score": event.significance_score,
             "metadata_": event.metadata_,
+            "raw_payload": getattr(event, "raw_payload", None) or {},
         }
         for event in events
     ]
@@ -150,12 +152,12 @@ def _owner_context(rows: list[dict], facts: dict) -> tuple[set[str], str | None,
         events = row.get("events") or []
         techs = {t["name"] for t in _techs_from_events(events)}
         stored = row.get("insight") or {}
-        focus = stored.get("focus_area")
+        focus = usable_focus_area(stored.get("focus_area"))
         if not focus and events:
             enriched = template_narrative_enriched(
                 row["person"], _event_dicts(events), _techs_from_events(events)
             )
-            focus = enriched.get("focus_area")
+            focus = usable_focus_area(enriched.get("focus_area"))
         repos = sorted({e.repo_full_name for e in events if e.repo_full_name})[:4]
         snapshot = {
             "person": row["person"],
@@ -230,22 +232,29 @@ def build_digest_payload(
         person_repos = {event.repo_full_name for event in events if event.repo_full_name}
 
         techs = _techs_from_events(events)
-        enriched = template_narrative_enriched(person, _event_dicts(events), techs)
+        event_dicts = _event_dicts(events)
+        enriched = template_narrative_enriched(person, event_dicts, techs)
         stored = row.get("insight") or {}
         if stored:
             headline = stored.get("headline") or enriched["headline"]
             summary = stored.get("narrative_text") or enriched["narrative"]
             why = stored.get("why_it_matters") or enriched["why_it_matters"]
-            focus = stored.get("focus_area") or enriched["focus_area"]
+            focus = usable_focus_area(stored.get("focus_area")) or usable_focus_area(
+                enriched["focus_area"]
+            )
             activity_type = stored.get("activity_type") or enriched["activity_type"]
             technologies = stored.get("technologies_mentioned") or enriched["technologies_mentioned"]
         else:
             headline = enriched["headline"]
             summary = enriched["narrative"]
             why = enriched["why_it_matters"]
-            focus = enriched["focus_area"]
+            focus = usable_focus_area(enriched["focus_area"])
             activity_type = enriched["activity_type"]
             technologies = enriched["technologies_mentioned"]
+
+        detail = evidence_detail(build_contribution_digest(person, event_dicts))
+        if detail and headline and detail.lower() in headline.lower():
+            detail = None
 
         person_payload = {
             "id": person_id,
@@ -264,6 +273,7 @@ def build_digest_payload(
                 "activity_type": activity_type if events else "quiet",
                 "activity_level": activity_level,
                 "current_focus": focus,
+                "detail": detail if events else None,
                 "meaningful_changes": person_meaningful,
                 "technologies": technologies[:5],
             }

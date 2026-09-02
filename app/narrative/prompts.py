@@ -28,10 +28,10 @@ Rules:
 8. Write `why_it_matters` ONLY if there is a genuinely interesting pattern.
    Ground it in the contribution (external repo, tests, a release), never
    career speculation. If nothing stands out, set it to null.
-9. Set `focus_area` to the kind of work if visible (e.g. "testing",
-   "code review", "documentation"). Use a domain topic from a repo
-   description only if that is clearer. Do not set it to a language name
-   unless that is all the evidence you have.
+9. Set `focus_area` ONLY to a short work-kind label when evidenced:
+   "testing", "documentation", "ci/cd", "infrastructure", "bugfixes",
+   "refactoring", "code review", or "release". Otherwise null.
+   Never use a repo description, tagline, README snippet, or language name.
 10. Set `activity_type` to one of: "external_contribution", "release",
     "new_project", "deep_work", "routine", "exploration". Pick the best fit.
 11. Return only the JSON object matching the given schema. No other text.

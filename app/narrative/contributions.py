@@ -135,6 +135,31 @@ def kind_focus(kinds: list[str]) -> str | None:
     return _KIND_FOCUS.get(primary)
 
 
+_ALLOWED_FOCUS = frozenset(_KIND_FOCUS.values())
+
+
+def usable_focus_area(value: str | None) -> str | None:
+    """Keep short work-kind labels; drop repo taglines and languages."""
+    if not value:
+        return None
+    key = value.strip().lower()
+    return key if key in _ALLOWED_FOCUS else None
+
+
+def evidence_detail(digest: dict[str, Any] | None) -> str | None:
+    """First PR/issue title or commit subject — never a repo description."""
+    for row in (digest or {}).get("repos") or []:
+        for title in row.get("titles") or []:
+            text = str(title).strip()
+            if text:
+                return text[:90]
+        for subject in row.get("commit_subjects") or []:
+            text = str(subject).strip()
+            if text:
+                return text[:90]
+    return None
+
+
 def build_contribution_digest(
     person: dict[str, Any],
     events: list[dict[str, Any]],
@@ -190,7 +215,6 @@ def build_contribution_digest(
     )
 
     for row in repos[:5]:
-        short = row["repo"].split("/")[-1] if "/" in row["repo"] else row["repo"]
         where = f"{'external repo ' if row['external'] else ''}{row['repo']}"
         phrase = kind_phrase(row["kinds"])
         action = row["actions"][0] if row["actions"] else "was active"
@@ -203,8 +227,6 @@ def build_contribution_digest(
             points.append(f"{action.capitalize()} in {where}: \"{title}\".")
         else:
             points.append(f"{action.capitalize()} in {where}.")
-        if row.get("description"):
-            points.append(f"{short} is described as: {str(row['description'])[:160]}")
 
     ranked_kinds = [k for k, _ in Counter(all_kinds).most_common()]
     ranked_kinds = [k for k in _KIND_PRIORITY if k in ranked_kinds] + [

@@ -69,3 +69,26 @@ def test_enriched_insight_is_about_the_work_not_the_stack():
     assert "focus on go" not in enriched["narrative"].lower()
     assert enriched["focus_area"] == "testing"
     assert "writing tests" in enriched["why_it_matters"]
+
+
+def test_repo_description_is_not_used_as_focus():
+    enriched = template_narrative_enriched(
+        {"github_username": "ben", "display_name": "Ben"},
+        [
+            {
+                "id": 1,
+                "event_type": "pull_request_opened",
+                "repo_full_name": "nousresearch/hermes-agent",
+                "significance_score": 10,
+                "metadata_": {
+                    "is_external": True,
+                    "language": "python",
+                    "description": "The agent that grows with you",
+                },
+            }
+        ],
+        [{"name": "python", "confidence": 1.0}],
+    )
+    assert enriched["focus_area"] is None
+    assert "The agent that grows with you" not in (enriched["headline"] or "")
+    assert "python" not in (enriched["headline"] or "").lower()

@@ -7,7 +7,7 @@ from app.config import get_settings
 from app.narrative.schema import WeeklyNarrative
 from app.narrative.prompts import SYSTEM_PROMPT
 from app.narrative.template import template_narrative, template_narrative_enriched
-from app.narrative.contributions import build_contribution_digest, work_from_event
+from app.narrative.contributions import build_contribution_digest, usable_focus_area, work_from_event
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def sanitize_narrative(
         why_it_matters=output.why_it_matters,
         technologies_mentioned=techs,
         supporting_event_ids=event_ids,
-        focus_area=output.focus_area,
+        focus_area=usable_focus_area(output.focus_area),
         activity_type=output.activity_type,
     )
 
@@ -58,7 +58,7 @@ def _narrative_to_enriched(parsed: WeeklyNarrative, model_name: str) -> dict[str
         "headline": parsed.headline,
         "narrative": parsed.narrative,
         "why_it_matters": parsed.why_it_matters,
-        "focus_area": parsed.focus_area,
+        "focus_area": usable_focus_area(parsed.focus_area),
         "activity_type": parsed.activity_type,
         "technologies_mentioned": parsed.technologies_mentioned,
         "supporting_event_ids": parsed.supporting_event_ids,

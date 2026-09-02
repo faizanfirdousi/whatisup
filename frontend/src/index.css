@@ -770,6 +770,10 @@ button {
 .network-focus {
   color: var(--text-secondary);
   font-size: 0.92rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .for-you-stack {

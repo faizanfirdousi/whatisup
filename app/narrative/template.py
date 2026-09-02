@@ -86,18 +86,8 @@ def _determine_focus_area(
     technologies: list[dict[str, Any]] | None,
     digest: dict[str, Any] | None = None,
 ) -> str | None:
-    """Prefer the kind of work over the repo's language."""
-    focus = kind_focus((digest or {}).get("work_kinds") or [])
-    if focus:
-        return focus
-    for row in (digest or {}).get("repos") or []:
-        desc = (row.get("description") or "").strip()
-        if desc:
-            return desc.split(".")[0][:40]
-    if not technologies:
-        return None
-    sorted_techs = sorted(technologies, key=lambda t: t.get("confidence", 0), reverse=True)
-    return sorted_techs[0]["name"] if sorted_techs else None
+    """Work kind only. Never a language or a truncated repo description."""
+    return kind_focus((digest or {}).get("work_kinds") or [])
 
 
 def _generate_headline(
