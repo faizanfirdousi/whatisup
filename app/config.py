@@ -45,6 +45,8 @@ class Settings(BaseSettings):
 
     # Collector tuning
     collect_min_interval: int = 900  # seconds (15 min debounce)
+    collect_concurrency: int = 8  # parallel people per collect
+    collect_event_pages: int = 3  # GitHub public events cap ~300 (3×100)
 
     # App
     app_name: str = "WhatIsUp"

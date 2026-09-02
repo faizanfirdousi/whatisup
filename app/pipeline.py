@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, date, timedelta, timezone
 
@@ -25,6 +26,7 @@ from app.scoring.technology import extract_technologies
 from app.scoring.canonical import canonical_key
 from app.narrative.generate import generate_weekly_narrative_enriched
 from app.config import get_settings
+from app.db import async_session
 from app.network.thresholds import COLLECT_STALE_SECONDS, NARRATE_LLM_MIN_SCORE
 
 logger = logging.getLogger(__name__)
@@ -260,47 +262,71 @@ async def _collect_for_person(
             await session.commit()
             return
 
-        seen_repos: set[str] = set()
-
+        norms: list[dict] = []
         for raw_event in events_data:
             norm = normalize_event(raw_event, person.id)
-            if not norm:
-                continue
+            if norm:
+                norms.append(norm)
 
-            result = await session.execute(
-                select(ActivityEvent).where(
-                    ActivityEvent.source == norm["source"],
-                    ActivityEvent.external_event_id == norm["external_event_id"],
-                )
+        if not norms:
+            await session.commit()
+            return
+
+        ext_ids = [n["external_event_id"] for n in norms]
+        existing_res = await session.execute(
+            select(ActivityEvent.external_event_id).where(
+                ActivityEvent.source == "github",
+                ActivityEvent.external_event_id.in_(ext_ids),
             )
-            if result.scalar_one_or_none():
-                continue
+        )
+        existing_ids = set(existing_res.scalars().all())
+        new_norms = [n for n in norms if n["external_event_id"] not in existing_ids]
+        if not new_norms:
+            await session.commit()
+            return
 
-            repo_name = norm["repo_full_name"]
-            meta: dict = dict(norm.get("metadata_") or {})
-            if repo_name and repo_name not in seen_repos and "/" in repo_name:
-                owner_name, repo_only = repo_name.split("/", 1)
-                meta = await fetch_repo_metadata(client, owner_name, repo_only)
+        repos_needed: list[str] = []
+        seen_repos: set[str] = set()
+        for n in new_norms:
+            repo_name = n.get("repo_full_name") or ""
+            if repo_name and "/" in repo_name and repo_name not in seen_repos:
                 seen_repos.add(repo_name)
+                repos_needed.append(repo_name)
+
+        repo_meta: dict[str, dict] = {}
+        if repos_needed:
+            fetched = await asyncio.gather(
+                *[
+                    fetch_repo_metadata(client, full.split("/", 1)[0], full.split("/", 1)[1])
+                    for full in repos_needed
+                ]
+            )
+            repo_meta = dict(zip(repos_needed, fetched))
+            for meta in repo_meta.values():
                 await _upsert_person_technologies(
                     session, person.id, extract_technologies(meta), tech_cache
                 )
 
-            has_existing_repo = False
-            if norm["event_type"] == "repository_created":
-                res_repo = await session.execute(
-                    select(ActivityEvent)
-                    .where(
-                        ActivityEvent.person_id == person.id,
-                        ActivityEvent.event_type == "repository_created",
-                    )
-                    .limit(1)
+        has_existing_repo = False
+        if any(n["event_type"] == "repository_created" for n in new_norms):
+            res_repo = await session.execute(
+                select(ActivityEvent.id)
+                .where(
+                    ActivityEvent.person_id == person.id,
+                    ActivityEvent.event_type == "repository_created",
                 )
-                has_existing_repo = res_repo.scalar_one_or_none() is not None
+                .limit(1)
+            )
+            has_existing_repo = res_repo.scalar_one_or_none() is not None
 
+        for norm in new_norms:
+            repo_name = norm.get("repo_full_name") or ""
+            meta: dict = dict(repo_meta.get(repo_name) or norm.get("metadata_") or {})
             context = build_score_context(norm, person, has_existing_repo)
             if context.get("is_external"):
                 meta["is_external"] = True
+            if norm["event_type"] == "repository_created":
+                has_existing_repo = True
             norm["metadata_"] = meta
             norm["significance_score"] = score_event(norm, context)
             session.add(ActivityEvent(**norm))
@@ -467,6 +493,37 @@ def owner_collect_allowed(owner, now: datetime | None = None) -> tuple[bool, str
     return True, "ok"
 
 
+async def _collect_people_parallel(
+    person_ids: list[int], client: GitHubClient | None = None
+) -> int:
+    """Collect many people with a bounded number of concurrent GitHub sessions."""
+    if not person_ids:
+        return 0
+    concurrency = max(1, get_settings().collect_concurrency)
+    sem = asyncio.Semaphore(concurrency)
+    processed = 0
+    lock = asyncio.Lock()
+
+    async def _one(person_id: int) -> None:
+        nonlocal processed
+        async with sem:
+            async with async_session() as person_session:
+                try:
+                    await _collect_for_person(
+                        person_session, person_id, {}, client=client
+                    )
+                    async with lock:
+                        processed += 1
+                except GitHubRateLimitError:
+                    logger.warning("GitHub rate limit while collecting person %s", person_id)
+                except Exception:
+                    logger.exception("Error collecting person %s", person_id)
+                    await person_session.rollback()
+
+    await asyncio.gather(*(_one(pid) for pid in person_ids))
+    return processed
+
+
 async def run_collect_for_owner(session: AsyncSession, owner_id: int) -> int:
     """Collect this owner's network only. No narrate."""
     from app.models.owner import Owner
@@ -486,21 +543,10 @@ async def run_collect_for_owner(session: AsyncSession, owner_id: int) -> int:
         if owner_person:
             await _ensure_connection(session, owner_id, owner_person, is_close=True)
             person_ids.append(owner.person_id)
+            await session.commit()
     client = GitHubClient(token=token)
-    processed = 0
-    tech_cache: dict[str, Technology] = {}
     try:
-        for person_id in person_ids:
-            try:
-                await _collect_for_person(session, person_id, tech_cache, client=client)
-                processed += 1
-            except GitHubRateLimitError:
-                logger.warning("Rate limit hit while collecting owner %s; stopping batch", owner_id)
-                break
-            except Exception:
-                logger.exception("Error collecting person %s for owner %s", person_id, owner_id)
-                await session.rollback()
-                tech_cache.clear()
+        processed = await _collect_people_parallel(person_ids, client=client)
     finally:
         await client.close()
         owner = await session.get(Owner, owner_id)
@@ -528,21 +574,7 @@ async def run_collect(session: AsyncSession) -> int:
         res = await session.execute(select(Person.id))
         person_ids = {pid for pid, in res.all()}
 
-    processed = 0
-    tech_cache: dict[str, Technology] = {}
-    for person_id in person_ids:
-        person = await session.get(Person, person_id)
-        username = person.github_username if person else person_id
-        try:
-            await _collect_for_person(session, person_id, tech_cache)
-            processed += 1
-        except GitHubRateLimitError:
-            logger.warning("Rate limit during global collect; continuing with remaining people")
-            tech_cache.clear()
-        except Exception:
-            logger.exception("Error collecting for %s", username)
-            await session.rollback()
-            tech_cache.clear()
+    processed = await _collect_people_parallel(list(person_ids))
     return processed
 
 

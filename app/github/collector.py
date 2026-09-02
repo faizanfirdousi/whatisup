@@ -1,7 +1,10 @@
-from typing import Any
-import httpx
+import asyncio
 import logging
+from typing import Any
 
+import httpx
+
+from app.config import get_settings
 from app.github.client import GitHubClient
 
 logger = logging.getLogger(__name__)
@@ -53,9 +56,10 @@ async def fetch_following(client: GitHubClient, username: str) -> list[dict[str,
 
 
 async def fetch_public_events(
-    client: GitHubClient, username: str, pages: int = 10, etag: str | None = None
+    client: GitHubClient, username: str, pages: int | None = None, etag: str | None = None
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Fetch public events until empty, 304, or `pages` (GitHub caps ~300 events / 90 days)."""
+    pages = pages if pages is not None else max(1, get_settings().collect_event_pages)
     events: list[dict[str, Any]] = []
     new_etag = etag
 
@@ -104,20 +108,25 @@ async def fetch_repo_metadata(client: GitHubClient, owner: str, repo: str) -> di
     }
 
     try:
-        repo_resp = await client.get(f"/repos/{owner}/{repo}")
-        repo_data = repo_resp.json()
+        repo_resp, contents_resp = await asyncio.gather(
+            client.get(f"/repos/{owner}/{repo}"),
+            client.get(f"/repos/{owner}/{repo}/contents"),
+            return_exceptions=True,
+        )
 
+        if isinstance(repo_resp, Exception):
+            raise repo_resp
+        repo_data = repo_resp.json()
         metadata["topics"] = repo_data.get("topics", [])
         metadata["language"] = repo_data.get("language")
         metadata["description"] = repo_data.get("description")
 
-        contents_resp = await client.get(f"/repos/{owner}/{repo}/contents")
-        contents_data = contents_resp.json()
-
-        if isinstance(contents_data, list):
-            metadata["files"] = [
-                item["name"] for item in contents_data if item.get("type") in ("file", "dir")
-            ]
+        if not isinstance(contents_resp, Exception):
+            contents_data = contents_resp.json()
+            if isinstance(contents_data, list):
+                metadata["files"] = [
+                    item["name"] for item in contents_data if item.get("type") in ("file", "dir")
+                ]
     except httpx.HTTPStatusError as e:
         logger.warning("Error fetching metadata for %s/%s: %s", owner, repo, e)
 

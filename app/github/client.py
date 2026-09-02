@@ -33,7 +33,10 @@ class GitHubClient:
     def client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
-                headers=self.get_headers(), base_url=self.base_url, timeout=10.0
+                headers=self.get_headers(),
+                base_url=self.base_url,
+                timeout=httpx.Timeout(20.0, connect=5.0),
+                limits=httpx.Limits(max_connections=40, max_keepalive_connections=20),
             )
         return self._client
 

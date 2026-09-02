@@ -8,6 +8,6 @@ DECLINING_PRIOR_MIN = 3
 PRIOR_WINDOW_DAYS = 28
 
 CLOSE_QUIET_MAX_SLOTS = 1
-COLLECT_STALE_SECONDS = 600  # crash recovery for collect_in_progress_at
+COLLECT_STALE_SECONDS = 1800  # crash recovery; first collect can exceed 10 minutes
 
 NARRATE_LLM_MIN_SCORE = 8
