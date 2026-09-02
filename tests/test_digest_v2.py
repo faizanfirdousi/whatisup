@@ -1,8 +1,28 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
-from app.network.facts import facts_from_loaded, get_period_bounds
+from app.network.facts import facts_from_loaded, get_period_bounds, split_events_by_period
 from app.routers.digest_v2 import build_digest_payload
+
+
+def test_split_events_by_period():
+    start_dt = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    end_dt = datetime(2026, 9, 2, 23, 59, 59, tzinfo=timezone.utc)
+    prior_start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    events = [
+        SimpleNamespace(occurred_at=datetime(2026, 8, 15, tzinfo=timezone.utc)),
+        SimpleNamespace(occurred_at=datetime(2026, 9, 1, 12, tzinfo=timezone.utc)),
+        SimpleNamespace(occurred_at=datetime(2026, 9, 2, 12, tzinfo=timezone.utc)),
+        SimpleNamespace(occurred_at=datetime(2026, 7, 1, tzinfo=timezone.utc)),
+    ]
+    period, prior = split_events_by_period(
+        events,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        prior_start=prior_start,
+    )
+    assert len(period) == 2
+    assert len(prior) == 1
 
 
 def test_period_bounds_default_to_2d():

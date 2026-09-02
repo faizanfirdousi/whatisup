@@ -20,6 +20,7 @@ from app.network.thresholds import (
 )
 from app.pipeline import current_week_bounds
 from app.scoring.technology import extract_technologies
+from app.timing import RequestTimer
 
 
 VALID_PERIODS = {"2d", "7d", "14d", "30d", "this_week"}
@@ -337,28 +338,67 @@ def facts_from_loaded(
     }
 
 
+def split_events_by_period(
+    events: list[ActivityEvent],
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
+    prior_start: datetime,
+) -> tuple[list[ActivityEvent], list[ActivityEvent]]:
+    """Split a preloaded event list into current-period and prior-window buckets."""
+    week_events: list[ActivityEvent] = []
+    prior_events: list[ActivityEvent] = []
+    for ev in events:
+        if start_dt <= ev.occurred_at <= end_dt:
+            week_events.append(ev)
+        elif prior_start <= ev.occurred_at < start_dt:
+            prior_events.append(ev)
+    return week_events, prior_events
+
+
 async def compute_network_facts(
-    session: AsyncSession, owner_id: int, today: date | None = None, period: str = "2d"
+    session: AsyncSession,
+    owner_id: int,
+    today: date | None = None,
+    period: str = "2d",
+    *,
+    owner_person_id: int | None = None,
+    connections: list[Connection] | None = None,
+    preloaded_events: list[ActivityEvent] | None = None,
+    timer: RequestTimer | None = None,
 ) -> dict:
-    owner = await session.get(Owner, owner_id)
     week_start, week_end, start_dt, end_dt = get_period_bounds(period, today)
     period_days = (week_end - week_start).days + 1
     prior_start = start_dt - timedelta(days=max(PRIOR_WINDOW_DAYS, period_days))
 
-    res = await session.execute(
-        select(Connection)
-        .options(selectinload(Connection.person))
-        .where(Connection.owner_id == owner_id)
-    )
-    conns = list(res.scalars().all())
-    connections = [{"person_id": c.person_id, "is_close": c.is_close} for c in conns]
+    if connections is None:
+        res = await session.execute(
+            select(Connection)
+            .options(selectinload(Connection.person))
+            .where(Connection.owner_id == owner_id)
+        )
+        conns = list(res.scalars().all())
+    else:
+        conns = connections
+
+    connection_rows = [{"person_id": c.person_id, "is_close": c.is_close} for c in conns]
     usernames = {c.person_id: c.person.github_username for c in conns}
     person_ids = [c.person_id for c in conns]
-    owner_person_id = owner.person_id if owner else None
+
+    if owner_person_id is None:
+        owner = await session.get(Owner, owner_id)
+        owner_person_id = owner.person_id if owner else None
 
     week_events: list[ActivityEvent] = []
     prior_events: list[ActivityEvent] = []
-    if person_ids:
+    if preloaded_events is not None:
+        week_events, prior_events = split_events_by_period(
+            preloaded_events,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            prior_start=prior_start,
+        )
+    elif person_ids:
         from sqlalchemy.orm import defer
 
         ev_res = await session.execute(
@@ -370,11 +410,12 @@ async def compute_network_facts(
                 ActivityEvent.occurred_at <= end_dt,
             )
         )
-        for ev in ev_res.scalars().all():
-            if start_dt <= ev.occurred_at <= end_dt:
-                week_events.append(ev)
-            elif prior_start <= ev.occurred_at < start_dt:
-                prior_events.append(ev)
+        week_events, prior_events = split_events_by_period(
+            list(ev_res.scalars().all()),
+            start_dt=start_dt,
+            end_dt=end_dt,
+            prior_start=prior_start,
+        )
 
     tech_this_week: dict[str, set[int]] = defaultdict(set)
     for ev in week_events:
@@ -384,11 +425,15 @@ async def compute_network_facts(
     first_seen_by_person_tech: dict[tuple[int, str], date] = {}
     tech_seen_before_week: set[str] = set()
     if person_ids:
-        pt_res = await session.execute(
+        pt_query = session.execute(
             select(PersonTechnology, Technology.name)
             .join(Technology, Technology.id == PersonTechnology.technology_id)
             .where(PersonTechnology.person_id.in_(person_ids))
         )
+        if timer:
+            pt_res = await timer.phase("db_technologies", pt_query)
+        else:
+            pt_res = await pt_query
         for pt, name in pt_res.all():
             first = pt.first_seen_at or pt.last_seen_at
             first_date = first.date() if isinstance(first, datetime) else first
@@ -402,7 +447,7 @@ async def compute_network_facts(
     pr_people = {ev.person_id for ev in week_events if ev.event_type in pr_types}
     earlier_external: set[int] = set()
     if pr_people:
-        hist = await session.execute(
+        hist_query = session.execute(
             select(
                 ActivityEvent.person_id,
                 ActivityEvent.repo_full_name,
@@ -416,6 +461,10 @@ async def compute_network_facts(
                 ActivityEvent.occurred_at < start_dt,
             )
         )
+        if timer:
+            hist = await timer.phase("db_pr_history", hist_query)
+        else:
+            hist = await hist_query
 
         class _Hist:
             __slots__ = ("person_id", "repo_full_name", "metadata_")
@@ -443,19 +492,36 @@ async def compute_network_facts(
             first_week_external.append(ev)
             seen_person.add(ev.person_id)
 
-    facts = facts_from_loaded(
-        week_start=week_start,
-        week_end=week_end,
-        owner_person_id=owner_person_id,
-        connections=connections,
-        week_events=week_events,
-        prior_events=prior_events,
-        usernames=usernames,
-        tech_this_week=tech_this_week,
-        first_seen_by_person_tech=first_seen_by_person_tech,
-        tech_seen_before_week=tech_seen_before_week,
-        period_days=period_days,
-    )
+    if timer:
+        facts = timer.phase_sync(
+            "network_intelligence_compute",
+            facts_from_loaded,
+            week_start=week_start,
+            week_end=week_end,
+            owner_person_id=owner_person_id,
+            connections=connection_rows,
+            week_events=week_events,
+            prior_events=prior_events,
+            usernames=usernames,
+            tech_this_week=tech_this_week,
+            first_seen_by_person_tech=first_seen_by_person_tech,
+            tech_seen_before_week=tech_seen_before_week,
+            period_days=period_days,
+        )
+    else:
+        facts = facts_from_loaded(
+            week_start=week_start,
+            week_end=week_end,
+            owner_person_id=owner_person_id,
+            connections=connection_rows,
+            week_events=week_events,
+            prior_events=prior_events,
+            usernames=usernames,
+            tech_this_week=tech_this_week,
+            first_seen_by_person_tech=first_seen_by_person_tech,
+            tech_seen_before_week=tech_seen_before_week,
+            period_days=period_days,
+        )
     facts["first_external_oss"] = [
         {"person_id": ev.person_id, "event_id": ev.id, "repo": ev.repo_full_name or ""}
         for ev in first_week_external

@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
@@ -13,7 +13,11 @@ from app.models.insight import Insight
 from app.models.owner import Owner
 from app.narrative.template import template_narrative_enriched
 from app.narrative.contributions import build_contribution_digest, evidence_detail, usable_focus_area
-from app.network.facts import compute_network_facts, get_period_bounds
+from app.network.facts import (
+    compute_network_facts,
+    get_period_bounds,
+    split_events_by_period,
+)
 from app.network.intelligence import (
     build_network_intelligence,
     direction_area_for_techs,
@@ -21,10 +25,12 @@ from app.network.intelligence import (
 )
 from app.network.feed_selection import primary_tech, repo_ecosystem, select_diverse_stories
 from app.network.interestingness import compute_interestingness, personal_note
+from app.network.thresholds import PRIOR_WINDOW_DAYS
 from app.scoring.canonical import canonical_key, display_name
 from app.scoring.technology import extract_technologies
 from app.serializers import insight_to_dict
 from app.rate_limit import limiter
+from app.timing import RequestTimer
 
 router = APIRouter(prefix="/api", tags=["digest_v2"])
 
@@ -381,45 +387,75 @@ def build_digest_payload(
 @limiter.limit("20/minute")
 async def get_my_digest_v2(
     request: Request,
+    response: Response,
     period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
 ):
+    timer = RequestTimer()
     week_start, week_end, start_dt, end_dt = get_period_bounds(period)
+    period_days = (week_end - week_start).days + 1
+    prior_start = start_dt - timedelta(days=max(PRIOR_WINDOW_DAYS, period_days))
 
-    res = await db.execute(
-        select(Connection)
-        .options(selectinload(Connection.person))
-        .where(Connection.owner_id == owner.id)
+    res = await timer.phase(
+        "db_connections",
+        db.execute(
+            select(Connection)
+            .options(selectinload(Connection.person))
+            .where(Connection.owner_id == owner.id)
+        ),
     )
     connections = res.scalars().all()
     person_ids = [conn.person_id for conn in connections]
 
-    events_by_person: dict[int, list[ActivityEvent]] = {pid: [] for pid in person_ids}
+    all_events: list[ActivityEvent] = []
     latest_by_person: dict[int, Insight] = {}
     if person_ids:
-        ev_res = await db.execute(
-            select(ActivityEvent)
-            .options(defer(ActivityEvent.raw_payload))
-            .where(
-                ActivityEvent.person_id.in_(person_ids),
-                ActivityEvent.occurred_at >= start_dt,
-                ActivityEvent.occurred_at <= end_dt,
-            )
-            .order_by(ActivityEvent.occurred_at.desc())
+        ev_res = await timer.phase(
+            "db_events",
+            db.execute(
+                select(ActivityEvent)
+                .options(defer(ActivityEvent.raw_payload))
+                .where(
+                    ActivityEvent.person_id.in_(person_ids),
+                    ActivityEvent.occurred_at >= prior_start,
+                    ActivityEvent.occurred_at <= end_dt,
+                )
+                .order_by(ActivityEvent.occurred_at.desc())
+            ),
         )
-        for event in ev_res.scalars().all():
-            events_by_person.setdefault(event.person_id, []).append(event)
+        all_events = list(ev_res.scalars().all())
 
-        ins_res = await db.execute(
-            select(Insight)
-            .distinct(Insight.person_id)
-            .where(Insight.person_id.in_(person_ids))
-            .order_by(Insight.person_id, Insight.week_start.desc())
+        ins_res = await timer.phase(
+            "db_insights",
+            db.execute(
+                select(Insight)
+                .distinct(Insight.person_id)
+                .where(Insight.person_id.in_(person_ids))
+                .order_by(Insight.person_id, Insight.week_start.desc())
+            ),
         )
         latest_by_person = {insight.person_id: insight for insight in ins_res.scalars().all()}
 
-    facts = await compute_network_facts(db, owner.id, period=period)
+    period_events, _prior_events = split_events_by_period(
+        all_events,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        prior_start=prior_start,
+    )
+    events_by_person: dict[int, list[ActivityEvent]] = {pid: [] for pid in person_ids}
+    for event in period_events:
+        events_by_person.setdefault(event.person_id, []).append(event)
+
+    facts = await compute_network_facts(
+        db,
+        owner.id,
+        period=period,
+        owner_person_id=owner.person_id,
+        connections=connections,
+        preloaded_events=all_events,
+        timer=timer,
+    )
     facts["owner_person_id"] = owner.person_id
     rows = []
     for conn in connections:
@@ -448,10 +484,18 @@ async def get_my_digest_v2(
     }
 
     name = owner.label or owner.github_username or "there"
-    return build_digest_payload(
+    payload = timer.phase_sync(
+        "payload_build",
+        build_digest_payload,
         owner_name=name,
         period=period,
         rows=rows,
         facts=facts,
         usernames=usernames,
     )
+
+    response.headers["Server-Timing"] = timer.server_timing_header()
+    if request.query_params.get("timing") == "1":
+        payload = {**payload, "_timing_ms": timer.as_dict()}
+
+    return payload

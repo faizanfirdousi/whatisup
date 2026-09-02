@@ -38,7 +38,7 @@ export function useStoryProgress(trackRef, reducedMotion) {
       if (reducedMotion) {
         current = target;
       } else {
-        current += (target - current) * 0.12;
+        current += (target - current) * 0.08;
         if (Math.abs(target - current) < 0.0005) current = target;
       }
       setProgress(current);
