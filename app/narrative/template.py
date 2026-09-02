@@ -1,6 +1,13 @@
 from collections import Counter
 from typing import Any
 
+from app.narrative.contributions import (
+    build_contribution_digest,
+    kind_focus,
+    kind_headline,
+    kind_phrase,
+)
+
 
 _LABELS = {
     "push": "push",
@@ -75,14 +82,22 @@ def _determine_activity_type(events: list[dict[str, Any]], person: dict[str, Any
     return "routine"
 
 
-def _determine_focus_area(technologies: list[dict[str, Any]] | None) -> str | None:
-    """Pick the dominant tech focus if one exists."""
+def _determine_focus_area(
+    technologies: list[dict[str, Any]] | None,
+    digest: dict[str, Any] | None = None,
+) -> str | None:
+    """Prefer the kind of work over the repo's language."""
+    focus = kind_focus((digest or {}).get("work_kinds") or [])
+    if focus:
+        return focus
+    for row in (digest or {}).get("repos") or []:
+        desc = (row.get("description") or "").strip()
+        if desc:
+            return desc.split(".")[0][:40]
     if not technologies:
         return None
-    # Highest confidence tech
     sorted_techs = sorted(technologies, key=lambda t: t.get("confidence", 0), reverse=True)
-    top = sorted_techs[0]["name"] if sorted_techs else None
-    return top
+    return sorted_techs[0]["name"] if sorted_techs else None
 
 
 def _generate_headline(
@@ -91,39 +106,33 @@ def _generate_headline(
     technologies: list[dict[str, Any]] | None,
     activity_type: str,
     top_repos: list[str],
+    digest: dict[str, Any] | None = None,
 ) -> str:
-    """Generate a punchy headline from the activity."""
-    name = _name(person)
-    tech_names = [t["name"] for t in (technologies or [])[:2] if t.get("name")]
+    """Headline about the contribution, not the stack."""
+    kind_line = kind_headline((digest or {}).get("work_kinds") or [])
+    short = _repo_short(top_repos[0]) if top_repos else None
+    if kind_line:
+        if short:
+            return f"{kind_line} in {short}"
+        return kind_line
 
     if activity_type == "release":
-        return f"{name} shipped a release"
+        return f"Shipped a release{f' of {short}' if short else ''}"
     if activity_type == "new_project":
-        return f"{name} started a new project"
+        return "Started a new project"
     if activity_type == "external_contribution":
-        if tech_names:
-            return f"{name} is contributing to {tech_names[0]} open source"
-        return f"{name} made an external contribution"
+        if short:
+            return f"Contributed to {short}"
+        return "Made an external contribution"
     if activity_type == "deep_work":
-        if len(top_repos) == 1:
-            short = _repo_short(top_repos[0])
-            if tech_names:
-                return f"{name} is sustaining work on a {tech_names[0]} project"
-            return f"{name} is sustaining work on {short}"
-        if tech_names:
-            return f"{name} is going deeper into {tech_names[0]}"
-        if top_repos:
-            short = top_repos[0].split("/")[-1] if "/" in top_repos[0] else top_repos[0]
-            return f"{name} is focused on {short}"
-        return f"{name} is actively building"
+        if short:
+            return f"Sustained work on {short}"
+        return "Did focused engineering work"
     if activity_type == "exploration":
-        return f"{name} is exploring new territory"
-    if tech_names:
-        return f"{name} is working with {tech_names[0]}"
-    if top_repos:
-        short = top_repos[0].split("/")[-1] if "/" in top_repos[0] else top_repos[0]
-        return f"{name} is active in {short}"
-    return f"{name} was active this period"
+        return "Explored new repositories"
+    if short:
+        return f"Active in {short}"
+    return f"{_name(person)} was active this period"
 
 
 def _short_repos(top_repos: list[str], limit: int = 3) -> list[str]:
@@ -133,14 +142,31 @@ def _short_repos(top_repos: list[str], limit: int = 3) -> list[str]:
     return names
 
 
+def _work_clause(digest: dict[str, Any] | None) -> str:
+    phrase = kind_phrase((digest or {}).get("work_kinds") or [])
+    title = None
+    for row in (digest or {}).get("repos") or []:
+        if row.get("titles"):
+            title = row["titles"][0]
+            break
+    if phrase and title:
+        return f" by {phrase} (\"{title}\")"
+    if phrase:
+        return f" by {phrase}"
+    if title:
+        return f" (\"{title}\")"
+    return ""
+
+
 def _generate_summary(
     person: dict[str, Any],
     events: list[dict[str, Any]],
     activity_type: str,
     top_repos: list[str],
     tech_names: list[str],
+    digest: dict[str, Any] | None = None,
 ) -> str:
-    """Story-shaped summary. Avoid dumping raw event counters."""
+    """Story-shaped summary. Lead with repo + kind of work, not the stack."""
     name = _name(person)
     repos = _short_repos(top_repos)
     repo_phrase = ""
@@ -148,24 +174,28 @@ def _generate_summary(
         repo_phrase = f" in {repos[0]}"
     elif repos:
         repo_phrase = f" across {', '.join(repos)}"
-    tech_phrase = f", with a focus on {tech_names[0]}" if tech_names else ""
+    work = _work_clause(digest)
+    # Language is background only when we have no contribution kind/title.
+    tech_phrase = ""
+    if not work and tech_names:
+        tech_phrase = f", with a focus on {tech_names[0]}"
     external = [e for e in events if _is_external(e, person)]
 
     if activity_type == "release":
-        return f"{name} shipped a release{repo_phrase}{tech_phrase}."
+        return f"{name} shipped a release{repo_phrase}{work}{tech_phrase}."
     if activity_type == "new_project":
-        return f"{name} started something new{repo_phrase}."
+        return f"{name} started something new{repo_phrase}{work}."
     if activity_type == "external_contribution":
         target = _repo(external[0]) if external else None
         if target:
-            return f"{name} contributed to {target}{tech_phrase}."
-        return f"{name} made an external open-source contribution{tech_phrase}."
+            return f"{name} contributed to {target}{work}{tech_phrase}."
+        return f"{name} made an external open-source contribution{work}{tech_phrase}."
     if activity_type == "deep_work":
-        return f"{name} did focused work{repo_phrase}{tech_phrase}."
+        return f"{name} did focused work{repo_phrase}{work}{tech_phrase}."
     if activity_type == "exploration":
         return f"{name} explored new repositories{repo_phrase}."
-    if repos or tech_names:
-        return f"{name} continued work{repo_phrase}{tech_phrase}."
+    if repos or work or tech_names:
+        return f"{name} continued work{repo_phrase}{work}{tech_phrase}."
     return f"{name} had public GitHub activity this period."
 
 
@@ -174,8 +204,9 @@ def _generate_why_it_matters(
     person: dict[str, Any],
     activity_type: str,
     technologies: list[dict[str, Any]] | None,
+    digest: dict[str, Any] | None = None,
 ) -> str | None:
-    """Generate a grounded 'why it matters' tied to the dominant activity type."""
+    """Generate a grounded 'why it matters' tied to the contribution, not the stack."""
     external_prs = [
         e
         for e in events
@@ -184,7 +215,8 @@ def _generate_why_it_matters(
     ]
     releases = [e for e in events if _event_type(e) == "release_published"]
     repos = {_repo(e) for e in events if _repo(e)}
-    tech_names = [t["name"] for t in (technologies or [])[:3] if t.get("name")]
+    phrase = kind_phrase((digest or {}).get("work_kinds") or [])
+    primary = (digest or {}).get("primary_kind")
 
     if activity_type == "release":
         release_repos = {_repo(e) for e in releases if _repo(e)}
@@ -201,27 +233,33 @@ def _generate_why_it_matters(
 
     if activity_type == "external_contribution":
         if len(external_prs) >= 2:
+            extra = f" The recent work looks like {phrase}." if phrase else ""
             return (
                 "Several external contributions suggest deepening participation "
-                "in projects beyond their own repositories."
+                f"in projects beyond their own repositories.{extra}"
             )
         if external_prs:
             target = _repo(external_prs[0])
+            if target and phrase:
+                return (
+                    f"Contributing to `{target}` by {phrase} is concrete work "
+                    "inside a project beyond their own repository."
+                )
             if target:
                 return (
                     f"Contributing to `{target}` places their recent activity inside "
                     "a project beyond their own repository."
                 )
-        if tech_names:
-            return f"Contributing externally in {tech_names[0]} connects their work to a broader ecosystem."
         return "External contributions show involvement outside their own repositories."
 
     if activity_type == "deep_work":
         if len(repos) == 1:
             short = _repo_short(next(iter(repos)))
+            if phrase:
+                return f"Repeated {phrase} in `{short}` suggests sustained investment in a specific problem."
             return f"Repeated work in `{short}` suggests sustained investment in a specific problem."
-        if tech_names:
-            return f"Continued focus on {tech_names[0]} suggests deepening expertise in that area."
+        if phrase:
+            return f"Continued {phrase} suggests sustained engineering work this period."
         return "Focused pull request and review activity suggests sustained engineering work."
 
     if activity_type == "exploration":
@@ -230,8 +268,8 @@ def _generate_why_it_matters(
     if len(repos) >= 4:
         return f"Work spread across {len(repos)} repositories suggests broad engagement this period."
 
-    if tech_names:
-        return f"Repeated {tech_names[0]} activity suggests a sustained focus this period."
+    if primary == "tests":
+        return "Test work is a concrete contribution, not just activity in a language."
 
     return None
 
@@ -303,12 +341,13 @@ def template_narrative_enriched(
 
     repos = [r for e in events if (r := _repo(e))]
     top_repos = [name for name, _ in Counter(repos).most_common(3)]
+    digest = build_contribution_digest(person, events)
     activity_type = _determine_activity_type(events, person)
-    focus_area = _determine_focus_area(technologies)
-    headline = _generate_headline(person, events, technologies, activity_type, top_repos)
-    why_it_matters = _generate_why_it_matters(events, person, activity_type, technologies)
+    focus_area = _determine_focus_area(technologies, digest)
+    headline = _generate_headline(person, events, technologies, activity_type, top_repos, digest)
+    why_it_matters = _generate_why_it_matters(events, person, activity_type, technologies, digest)
     tech_names = [t["name"] for t in (technologies or [])[:4] if t.get("name")]
-    summary = _generate_summary(person, events, activity_type, top_repos, tech_names)
+    summary = _generate_summary(person, events, activity_type, top_repos, tech_names, digest)
     event_ids = [e["id"] for e in events if e.get("id") is not None]
 
     return {

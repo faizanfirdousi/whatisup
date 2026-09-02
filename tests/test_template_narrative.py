@@ -35,7 +35,8 @@ def test_enriched_template_is_a_story_not_a_counter():
     )
     assert enriched["headline"]
     assert "opened 1" not in enriched["narrative"].lower()
-    assert "kserve" in enriched["narrative"].lower() or "python" in enriched["narrative"].lower()
+    assert "kserve" in enriched["narrative"].lower()
+    assert "python" not in enriched["headline"].lower()
     assert enriched["activity_type"] == "external_contribution"
     assert "beyond their own repository" in enriched["why_it_matters"].lower()
 

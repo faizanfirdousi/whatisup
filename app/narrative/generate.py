@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.narrative.schema import WeeklyNarrative
 from app.narrative.prompts import SYSTEM_PROMPT
 from app.narrative.template import template_narrative, template_narrative_enriched
+from app.narrative.contributions import build_contribution_digest, work_from_event
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,46 @@ def _narrative_to_enriched(parsed: WeeklyNarrative, model_name: str) -> dict[str
     }
 
 
+def _llm_context(
+    person: dict[str, Any],
+    events: list[dict[str, Any]],
+    technologies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    digest = build_contribution_digest(person, events)
+    compact_events = []
+    for e in events:
+        work = work_from_event(e)
+        meta = e.get("metadata_") or e.get("metadata") or {}
+        compact_events.append(
+            {
+                "id": e["id"],
+                "type": e.get("event_type") or e.get("type"),
+                "repo": e.get("repo_full_name") or e.get("repo"),
+                "date": (
+                    e["occurred_at"].isoformat()
+                    if hasattr(e.get("occurred_at"), "isoformat")
+                    else str(e.get("occurred_at", ""))
+                ),
+                "score": e.get("significance_score"),
+                "external": bool(meta.get("is_external")),
+                "titles": work.get("titles") or [],
+                "commit_subjects": work.get("commit_subjects") or [],
+                "work_kinds": work.get("work_kinds") or [],
+                "repo_description": meta.get("description"),
+                "repo_language": meta.get("language"),
+            }
+        )
+    return {
+        "person": {
+            "username": person["github_username"],
+            "display_name": person.get("display_name"),
+        },
+        "contribution_digest": digest,
+        "background_technologies": technologies,
+        "events": compact_events,
+    }
+
+
 async def generate_weekly_narrative(
     person: dict[str, Any],
     events: list[dict[str, Any]],
@@ -85,26 +126,7 @@ async def generate_weekly_narrative(
         
     allowed_technologies = {t["name"].lower() for t in technologies}
     allowed_event_ids = {e["id"] for e in events}
-    
-    # Prepare context
-    context = {
-        "person": {
-            "username": person["github_username"],
-            "display_name": person.get("display_name")
-        },
-        "technologies": technologies,
-        "events": [
-            {
-                "id": e["id"],
-                "type": e["event_type"],
-                "repo": e["repo_full_name"],
-                "date": e["occurred_at"].isoformat() if hasattr(e["occurred_at"], "isoformat") else str(e["occurred_at"]),
-                "score": e["significance_score"],
-                "metadata": e.get("metadata_", {})
-            }
-            for e in events
-        ]
-    }
+    context = _llm_context(person, events, technologies)
     
     # JSON schema for OpenRouter / OpenAI
     schema = WeeklyNarrative.model_json_schema()
@@ -194,29 +216,7 @@ async def generate_weekly_narrative_enriched(
 
     allowed_technologies = {t["name"].lower() for t in technologies}
     allowed_event_ids = {e["id"] for e in events}
-
-    context = {
-        "person": {
-            "username": person["github_username"],
-            "display_name": person.get("display_name"),
-        },
-        "technologies": technologies,
-        "events": [
-            {
-                "id": e["id"],
-                "type": e["event_type"],
-                "repo": e["repo_full_name"],
-                "date": (
-                    e["occurred_at"].isoformat()
-                    if hasattr(e["occurred_at"], "isoformat")
-                    else str(e["occurred_at"])
-                ),
-                "score": e["significance_score"],
-                "metadata": e.get("metadata_", {}),
-            }
-            for e in events
-        ],
-    }
+    context = _llm_context(person, events, technologies)
 
     schema = WeeklyNarrative.model_json_schema()
     headers = {

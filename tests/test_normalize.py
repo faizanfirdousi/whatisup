@@ -33,11 +33,13 @@ def test_normalize_pr_opened():
         "type": "PullRequestEvent",
         "repo": {"name": "owner/repo"},
         "created_at": "2023-01-01T12:00:00Z",
-        "payload": {"action": "opened"}
+        "payload": {"action": "opened", "pull_request": {"title": "Add coverage for parser"}},
     }
     result = normalize_event(raw_event, person_id=1)
     assert result is not None
     assert result["event_type"] == "pull_request_opened"
+    assert result["metadata_"]["titles"] == ["Add coverage for parser"]
+    assert "tests" in result["metadata_"]["work_kinds"]
 
 def test_normalize_pr_merged():
     raw_event = {

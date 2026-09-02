@@ -3,6 +3,8 @@ from typing import Any
 from dateutil import parser
 import logging
 
+from app.github.work_signals import extract_work_signals
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +60,6 @@ def normalize_event(raw_event: dict[str, Any], person_id: int) -> dict[str, Any]
         "repo_full_name": repo_name,
         "occurred_at": parse_github_date(raw_event.get("created_at")),
         "raw_payload": raw_event,
-        "metadata_": {},  # To be filled by repo metadata fetch
+        "metadata_": extract_work_signals(raw_event),
         "significance_score": 0, # To be filled by scoring pass
     }

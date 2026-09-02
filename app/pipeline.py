@@ -321,7 +321,11 @@ async def _collect_for_person(
 
         for norm in new_norms:
             repo_name = norm.get("repo_full_name") or ""
-            meta: dict = dict(repo_meta.get(repo_name) or norm.get("metadata_") or {})
+            meta: dict = dict(repo_meta.get(repo_name) or {})
+            work = norm.get("metadata_") or {}
+            for key in ("titles", "commit_subjects", "work_kinds"):
+                if work.get(key):
+                    meta[key] = work[key]
             context = build_score_context(norm, person, has_existing_repo)
             if context.get("is_external"):
                 meta["is_external"] = True
@@ -399,6 +403,7 @@ async def _narrate_for_person(
             "occurred_at": e.occurred_at,
             "significance_score": e.significance_score,
             "metadata_": e.metadata_,
+            "raw_payload": e.raw_payload,
         }
         for e in week_events
     ]
