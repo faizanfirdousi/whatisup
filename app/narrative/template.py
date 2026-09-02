@@ -37,6 +37,10 @@ def _repo(event: dict[str, Any]) -> str | None:
     return event.get("repo_full_name") or event.get("repo")
 
 
+def _repo_short(repo: str) -> str:
+    return repo.split("/")[-1] if "/" in repo else repo
+
+
 def _is_external(event: dict[str, Any], person: dict[str, Any]) -> bool:
     """Check if event is on a repo not owned by the person."""
     meta = event.get("metadata_") or event.get("metadata") or {}
@@ -101,6 +105,11 @@ def _generate_headline(
             return f"{name} is contributing to {tech_names[0]} open source"
         return f"{name} made an external contribution"
     if activity_type == "deep_work":
+        if len(top_repos) == 1:
+            short = _repo_short(top_repos[0])
+            if tech_names:
+                return f"{name} is sustaining work on a {tech_names[0]} project"
+            return f"{name} is sustaining work on {short}"
         if tech_names:
             return f"{name} is going deeper into {tech_names[0]}"
         if top_repos:
@@ -178,10 +187,12 @@ def _generate_why_it_matters(
     tech_names = [t["name"] for t in (technologies or [])[:3] if t.get("name")]
 
     if activity_type == "release":
-        if len(releases) >= 2:
+        release_repos = {_repo(e) for e in releases if _repo(e)}
+        if len(release_repos) >= 2:
+            repos_short = ", ".join(_repo_short(r) for r in sorted(release_repos)[:2])
             return (
-                "Multiple releases suggest active maintenance and iteration, "
-                "not just one-off experimentation."
+                f"Shipping releases across {repos_short} suggests active maintenance "
+                "across multiple projects."
             )
         return "A release usually means a project is moving into delivery or active upkeep."
 
@@ -194,13 +205,21 @@ def _generate_why_it_matters(
                 "Several external contributions suggest deepening participation "
                 "in projects beyond their own repositories."
             )
+        if external_prs:
+            target = _repo(external_prs[0])
+            if target:
+                return (
+                    f"Contributing to `{target}` places their recent activity inside "
+                    "a project beyond their own repository."
+                )
         if tech_names:
             return f"Contributing externally in {tech_names[0]} connects their work to a broader ecosystem."
         return "External contributions show involvement outside their own repositories."
 
     if activity_type == "deep_work":
         if len(repos) == 1:
-            return "Sustained work in one repository suggests focused building rather than scattered activity."
+            short = _repo_short(next(iter(repos)))
+            return f"Repeated work in `{short}` suggests sustained investment in a specific problem."
         if tech_names:
             return f"Continued focus on {tech_names[0]} suggests deepening expertise in that area."
         return "Focused pull request and review activity suggests sustained engineering work."

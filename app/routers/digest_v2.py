@@ -14,7 +14,11 @@ from app.models.owner import Owner
 from app.models.person import Person
 from app.narrative.template import template_narrative_enriched
 from app.network.facts import compute_network_facts, get_period_bounds
-from app.network.intelligence import build_network_intelligence, infer_focus
+from app.network.intelligence import (
+    build_network_intelligence,
+    direction_area_for_techs,
+    owner_network_alignment,
+)
 from app.network.feed_selection import primary_tech, repo_ecosystem, select_diverse_stories
 from app.network.interestingness import compute_interestingness, personal_note
 from app.scoring.canonical import canonical_key, display_name
@@ -25,7 +29,39 @@ router = APIRouter(prefix="/api", tags=["digest_v2"])
 
 MEANINGFUL_MIN = 5
 STORY_LIMIT = 5
-FEED_STORY_LIMIT = 5
+FEED_STORY_LIMIT = 6
+FEED_DISPLAY_LIMIT = 6
+ATTENTION_TYPES = frozenset({"release", "new_project", "external_contribution", "deep_work"})
+MIN_ATTENTION_RANK = 38
+
+
+def _present_story_copy(
+    summary: str,
+    why: str | None,
+    *,
+    activity_type: str,
+    highlight_why: bool = False,
+) -> tuple[str, str | None]:
+    """Fold contextual why into the summary unless the insight is unusually complex."""
+    if not why:
+        return summary, None
+    if highlight_why or activity_type in ("exploration",):
+        return summary, why
+    body = summary.rstrip()
+    if body and not body.endswith("."):
+        body += "."
+    return f"{body} {why}", None
+
+
+def _eligible_for_attention(story: dict) -> bool:
+    activity = story.get("activity_type")
+    if activity not in ATTENTION_TYPES:
+        return False
+    rank = story.get("rank") or 0
+    meaningful = story.get("meaningful_changes") or 0
+    if activity == "deep_work":
+        return meaningful >= 2 or rank >= MIN_ATTENTION_RANK + 10
+    return rank >= MIN_ATTENTION_RANK or meaningful >= 2
 
 
 def _insight_covers_period(insight: Insight | None, start: date, end: date) -> bool:
@@ -137,6 +173,7 @@ def _build_your_direction(
     owner_techs: set[str],
     owner_focus: str | None,
     intelligence: dict,
+    facts: dict,
 ) -> dict | None:
     if not snapshot and not owner_techs and not owner_focus:
         return None
@@ -146,8 +183,10 @@ def _build_your_direction(
     overlap = None
     if len(similar) >= 2:
         overlap = f"{len(similar)} people you follow are moving in related areas"
-    elif for_you.get("direction", {}).get("summary"):
-        overlap = for_you["direction"]["summary"]
+    elif cluster := for_you.get("relevant_cluster"):
+        overlap = cluster.get("summary")
+    elif alignment := owner_network_alignment(facts, owner_techs):
+        overlap = alignment
 
     tech_keys = owner_techs or set(snapshot.get("technologies") or []) if snapshot else owner_techs
     tech_labels = [display_name(t) for t in sorted(tech_keys)[:6]]
@@ -230,18 +269,23 @@ def build_digest_payload(
             }
         )
         if row["is_close"] and person_id != owner_id:
+            tech_display = [display_name(t) for t in technologies[:4]]
+            repo_list = list(person_repos)[:3]
+            repo_count = len(person_repos)
+            activity_summary = None
+            if person_meaningful > 0 and repo_count:
+                activity_summary = (
+                    f"Recent activity across {repo_count} "
+                    f"{'repository' if repo_count == 1 else 'repositories'}."
+                )
             close_circle.append(
                 {
                     "person": person_payload,
-                    "current_focus": infer_focus(
-                        focus,
-                        technologies[:3],
-                        list(person_repos)[:3],
-                    ),
-                    "recent_change": headline if person_meaningful > 0 else None,
+                    "direction_area": direction_area_for_techs(technologies),
+                    "technologies": tech_display,
                     "meaningful_changes": person_meaningful,
-                    "active_repos": list(person_repos)[:3],
-                    "technologies": technologies[:3],
+                    "active_repos": repo_list,
+                    "activity_summary": activity_summary,
                 }
             )
         if events and person_id != owner_id:
@@ -263,13 +307,19 @@ def build_digest_payload(
             is_tech_shift = trend.get("direction") == "up" and bool(
                 set(tech_keys) & network_rising
             )
+            card_summary, card_why = _present_story_copy(
+                summary,
+                why,
+                activity_type=activity_type,
+                highlight_why=is_tech_shift,
+            )
             stories.append(
                 {
                     "id": f"story:person:{person_id}",
                     "type": "person_story",
                     "headline": headline,
-                    "summary": summary,
-                    "why_it_matters": why,
+                    "summary": card_summary,
+                    "why_it_matters": card_why,
                     "personal_note": note,
                     "person": person_payload,
                     "technologies": tech_display,
@@ -283,20 +333,11 @@ def build_digest_payload(
                 }
             )
 
-    strong_types = {"release", "new_project", "external_contribution", "deep_work", "exploration"}
-    editorial = [
-        story
-        for story in stories
-        if story["activity_type"] in strong_types
-        or story.get("why_it_matters")
-        or (story.get("meaningful_changes") or 0) > 0
-    ]
-    selected = select_diverse_stories(editorial or stories, limit=FEED_STORY_LIMIT)
-    close_circle = [
-        item
-        for item in close_circle
-        if item.get("meaningful_changes", 0) > 0 or item.get("recent_change")
-    ]
+    editorial = [story for story in stories if _eligible_for_attention(story)]
+    ranked = select_diverse_stories(editorial, limit=FEED_STORY_LIMIT)
+    selected = ranked[:FEED_DISPLAY_LIMIT]
+    more_stories_count = max(0, len(ranked) - len(selected))
+    close_circle = [item for item in close_circle if item.get("meaningful_changes", 0) > 0]
     close_circle.sort(key=lambda item: item["meaningful_changes"], reverse=True)
     pulse = _network_pulse(facts)
     intelligence = build_network_intelligence(
@@ -311,6 +352,7 @@ def build_digest_payload(
         owner_techs=owner_techs,
         owner_focus=owner_focus,
         intelligence=intelligence,
+        facts=facts,
     )
     return {
         "owner_name": owner_name,
@@ -318,6 +360,7 @@ def build_digest_payload(
         "period": period,
         "network_intelligence": intelligence,
         "stories": selected,
+        "more_stories_count": more_stories_count,
         "your_direction": your_direction,
         "close_circle": close_circle[:6],
         "network_pulse": pulse,

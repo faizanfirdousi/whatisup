@@ -40,6 +40,45 @@ def _tech_row(facts: dict, name: str) -> dict | None:
     return None
 
 
+def _likely_tracking_artifact(tech_row: dict[str, Any]) -> bool:
+    people = len(tech_row.get("person_ids") or [])
+    new_people = len(tech_row.get("new_to_person_ids") or [])
+    if people == 0:
+        return True
+    return new_people >= max(2, round(people * 0.6))
+
+
+def _rising_with_history(facts: dict, tech_name: str) -> bool:
+    for row in facts.get("rising") or []:
+        if canonical_key(row["name"]) != canonical_key(tech_name):
+            continue
+        prior = float(row.get("prior_4w_avg_people") or 0)
+        return prior >= 1.0
+    return False
+
+
+def _tech_evidence_item(facts: dict, tech_row: dict[str, Any]) -> dict[str, Any]:
+    label = _cap(tech_row["name"])
+    people = len(tech_row.get("person_ids") or [])
+    key = canonical_key(tech_row["name"])
+    if _rising_with_history(facts, tech_row["name"]) and not _likely_tracking_artifact(tech_row):
+        body = (
+            f"{label} activity increased vs the prior period "
+            f"({people} people active recently)."
+        )
+    else:
+        body = f"{people} people had recent activity involving {label}."
+    return {"id": f"tech:{key}", "title": label, "body": body, "tech": key}
+
+
+def direction_area_for_techs(tech_names: list[str]) -> str | None:
+    keys = {canonical_key(t) for t in tech_names if t}
+    themes = _themes_for_techs(keys)
+    if not themes:
+        return None
+    return next(iter(sorted(themes))).title()
+
+
 def _themes_for_techs(tech_keys: set[str]) -> set[str]:
     themes: set[str] = set()
     for theme, keywords in CLUSTER_THEMES.items():
@@ -158,71 +197,9 @@ def network_signals(
     movement: dict[str, list[dict[str, Any]]],
     clusters: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """At most three hero signals — summary only, detail lives below."""
-    signals: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for row in movement.get("growing") or []:
-        key = canonical_key(row["name"])
-        if key in seen:
-            continue
-        seen.add(key)
-        signals.append(
-            {
-                "name": key,
-                "direction": "up",
-                "label": f"{_cap(row['name'])} ↑",
-                "description": row["signal"],
-            }
-        )
-        break
-
-    external = facts.get("first_external_oss") or []
-    if len(external) >= 2:
-        signals.append(
-            {
-                "name": "open-source",
-                "direction": "up",
-                "label": "Open source ↑",
-                "description": f"{len(external)} first tracked external contributions",
-            }
-        )
-
-    for cluster in clusters:
-        if cluster.get("repos"):
-            continue
-        theme_id = cluster.get("id", "")
-        if theme_id in seen:
-            continue
-        seen.add(theme_id)
-        signals.append(
-            {
-                "name": theme_id,
-                "direction": "cluster",
-                "label": cluster["headline"],
-                "description": cluster["summary"],
-            }
-        )
-        break
-
-    if len(signals) < MAX_HERO_SIGNALS:
-        for row in movement.get("new") or []:
-            key = canonical_key(row["name"])
-            if key in seen:
-                continue
-            seen.add(key)
-            signals.append(
-                {
-                    "name": key,
-                    "direction": "new",
-                    "label": f"{_cap(row['name'])} new",
-                    "description": row["signal"],
-                }
-            )
-            if len(signals) >= MAX_HERO_SIGNALS:
-                break
-
-    return signals[:MAX_HERO_SIGNALS]
+    """Deprecated — hero uses a single cta link instead of signal chips."""
+    del facts, movement, clusters
+    return []
 
 
 def build_hero(
@@ -231,54 +208,40 @@ def build_hero(
     clusters: list[dict[str, Any]],
     curated_stories: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    external = facts.get("first_external_oss") or []
-    growing = movement.get("growing") or []
-    top_cluster = next((c for c in clusters if not c.get("repos")), None)
+    """Hero states the network conclusion; technology evidence lives in story cards."""
+    del curated_stories
+    theme_clusters = [c for c in clusters if not c.get("repos")]
+    top_cluster = theme_clusters[0] if theme_clusters else None
 
-    headline_parts: list[str] = []
-    if external and len(external) >= 2:
-        headline_parts.append("open source")
-    if growing:
-        headline_parts.append(_cap(growing[0]["name"]))
-    elif top_cluster:
-        headline_parts.append(top_cluster["headline"].lower())
-
-    if len(headline_parts) >= 2:
-        headline = f"Your network is shifting toward {headline_parts[0]} and {headline_parts[1]}"
-    elif headline_parts:
-        headline = f"Your network is shifting toward {headline_parts[0]}"
-    elif curated_stories:
-        headline = curated_stories[0]["title"]
-    else:
-        headline = "What's changing in your network"
-
-    subhead_parts: list[str] = []
-    if external and len(external) >= 2:
-        subhead_parts.append(
-            f"{len(external)} people made first tracked external contributions"
-        )
-    if growing:
-        row = _tech_row(facts, growing[0]["name"])
-        new_count = len(row.get("new_to_person_ids") or []) if row else 0
-        label = _cap(growing[0]["name"])
-        if new_count:
-            subhead_parts.append(
-                f"{label} appeared in newly tracked contexts for {new_count} people"
+    if top_cluster:
+        headline = f"{top_cluster['headline']} is the strongest active theme in your network"
+        techs = top_cluster.get("technologies") or []
+        count = top_cluster["people_count"]
+        if len(techs) >= 2:
+            tech_phrase = ", ".join(_cap(t) for t in techs[:4])
+            subhead = (
+                f"{count} people recently worked across {tech_phrase}, and related technologies."
             )
         else:
-            subhead_parts.append(f"{label} is appearing more often across your network")
-    elif top_cluster:
-        subhead_parts.append(top_cluster["summary"].rstrip("."))
-
-    subhead = (
-        ". ".join(subhead_parts) + "."
-        if subhead_parts
-        else "We'll highlight meaningful shifts as patterns emerge across your network."
-    )
+            subhead = top_cluster["summary"].rstrip(".") + "."
+        cta = {
+            "label": f"Explore {top_cluster['headline']}",
+            "href": "/network",
+        }
+    else:
+        active = len(facts.get("active_person_ids") or [])
+        headline = "What's active in your network"
+        subhead = (
+            f"{active} people had tracked public activity this period."
+            if active
+            else "We'll highlight meaningful shifts as patterns emerge across your network."
+        )
+        cta = {"label": "Explore network", "href": "/network"}
 
     return {
         "headline": headline,
         "subhead": subhead,
+        "cta": cta,
         "signals": network_signals(facts, movement, clusters),
     }
 
@@ -341,86 +304,18 @@ def curated_network_stories(
     clusters: list[dict[str, Any]],
     movement: dict[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """2–3 specific network stories — not activity metrics."""
-    candidates: list[dict[str, Any]] = []
-    used_themes: set[str] = set()
-
-    rising = facts.get("rising") or []
-    new_in = facts.get("new_in_network") or []
-    spread_sources = rising or new_in or movement.get("new") or []
-
-    for row in spread_sources:
-        key = canonical_key(row.get("name", ""))
-        if key in used_themes:
-            continue
-        tech_row = _tech_row(facts, row["name"])
-        if not tech_row:
-            continue
-        people = len(tech_row.get("person_ids") or [])
-        new_people = len(tech_row.get("new_to_person_ids") or [])
-        if people < 2:
-            continue
-        label = _cap(row["name"])
-        if new_people >= 2:
-            body = (
-                f"{people} people worked with {label} this period, "
-                f"and it was newly tracked for {new_people} of them."
-            )
-            priority = 100 + new_people
-        else:
-            body = f"{people} people worked with {label} in newly active parts of your network."
-            priority = 60 + people
-        candidates.append(
-            {
-                "id": f"spread:{key}",
-                "title": f"{label} is spreading through your network",
-                "body": body,
-                "tech": key,
-                "priority": priority,
-            }
-        )
-        used_themes.add(key)
-
-    external = facts.get("first_external_oss") or []
-    if len(external) >= 2:
-        candidates.append(
-            {
-                "id": "oss:participation",
-                "title": "Open-source participation is increasing",
-                "body": (
-                    f"{len(external)} people made their first tracked external "
-                    "contribution during this period."
-                ),
-                "priority": 90 + len(external),
-            }
-        )
-
-    theme_clusters = [c for c in clusters if not c.get("repos")]
-    if theme_clusters:
-        top = theme_clusters[0]
-        tech_labels = ", ".join(_cap(t) for t in (top.get("technologies") or [])[:4])
-        candidates.append(
-            {
-                "id": f"cluster:{top['id']}",
-                "title": f"{top['headline']} is the strongest cluster",
-                "body": (
-                    f"{tech_labels} connect activity across "
-                    f"{top['people_count']} people in your network."
-                    if tech_labels
-                    else top["summary"]
-                ),
-                "priority": 70 + top["people_count"],
-            }
-        )
-
-    candidates.sort(key=lambda item: item["priority"], reverse=True)
+    """Top technology evidence — honest observation copy, not trend claims."""
+    del clusters, movement
+    rows = sorted(
+        facts.get("tech_this_week") or [],
+        key=lambda r: len(r.get("person_ids") or []),
+        reverse=True,
+    )
     picked: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for story in candidates:
-        if story["id"] in seen_ids:
+    for row in rows:
+        if len(row.get("person_ids") or []) < 2:
             continue
-        seen_ids.add(story["id"])
-        picked.append({k: v for k, v in story.items() if k != "priority"})
+        picked.append(_tech_evidence_item(facts, row))
         if len(picked) >= MAX_NETWORK_STORIES:
             break
     return picked
@@ -433,43 +328,14 @@ def curate_for_you(
     owner_techs: set[str] | None = None,
     clusters: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Three curated personal insights — direction, similar people, one cluster."""
+    """Network-relative insights — similar people and one relevant cluster."""
     owner_keys = {canonical_key(t) for t in (owner_techs or set())}
+    owner_id = facts.get("owner_person_id")
     if not owner_keys:
         return None
 
     owner_themes = _themes_for_techs(owner_keys)
-    direction = None
-    related_labels: list[str] = []
-    for row in facts.get("rising") or []:
-        key = canonical_key(row["name"])
-        if key in owner_keys or _themes_for_techs({key}) & owner_themes:
-            related_labels.append(_cap(row["name"]))
-    for row in facts.get("tech_this_week") or []:
-        key = canonical_key(row["name"])
-        if key in owner_keys and len(row.get("person_ids") or []) >= 2:
-            related_labels.append(_cap(row["name"]))
 
-    unique_labels = []
-    seen: set[str] = set()
-    for label in related_labels:
-        key = label.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_labels.append(label)
-
-    if unique_labels:
-        direction = {
-            "headline": "Your recent work aligns with a growing part of your network",
-            "summary": (
-                f"{', '.join(unique_labels[:3])} "
-                f"{'is' if len(unique_labels) == 1 else 'are'} appearing more frequently "
-                "among people you follow."
-            ),
-        }
-
-    # Merge per-person convergence at cluster level
     person_data: dict[int, dict[str, Any]] = {}
     for row in facts.get("tech_this_week") or []:
         key = canonical_key(row["name"])
@@ -478,6 +344,8 @@ def curate_for_you(
             continue
         themes = _themes_for_techs({key})
         for pid in row.get("person_ids") or []:
+            if owner_id and pid == owner_id:
+                continue
             login = usernames.get(pid)
             if not login:
                 continue
@@ -502,12 +370,18 @@ def curate_for_you(
         if len(similar_people) >= MAX_SIMILAR_PEOPLE:
             break
         theme = next(iter(sorted(data["themes"])), None)
+        techs = sorted(data["technologies"])[:4]
         similar_people.append(
             {
                 "person_id": pid,
                 "github_username": data["github_username"],
-                "technologies": sorted(data["technologies"])[:4],
+                "technologies": techs,
                 "cluster": theme.title() if theme else None,
+                "hook": (
+                    f"Also working with {' · '.join(techs[:3])}"
+                    if techs
+                    else "Moving in a related direction"
+                ),
             }
         )
 
@@ -537,14 +411,32 @@ def curate_for_you(
             "cluster_id": best["id"],
         }
 
-    if not direction and not similar_people and not relevant_cluster:
+    if not similar_people and not relevant_cluster:
         return None
 
     return {
-        "direction": direction,
         "similar_people": similar_people,
         "relevant_cluster": relevant_cluster,
     }
+
+
+def owner_network_alignment(facts: dict, owner_techs: set[str]) -> str | None:
+    """One-line alignment between owner tech and rising network trends."""
+    owner_keys = {canonical_key(t) for t in owner_techs}
+    owner_themes = _themes_for_techs(owner_keys)
+    labels: list[str] = []
+    seen: set[str] = set()
+    for row in facts.get("rising") or []:
+        key = canonical_key(row["name"])
+        if key in owner_keys or bool(_themes_for_techs({key}) & owner_themes):
+            label = display_name(row["name"])
+            if label.lower() not in seen:
+                seen.add(label.lower())
+                labels.append(label)
+    if not labels:
+        return None
+    verb = "is" if len(labels) == 1 else "are"
+    return f"{', '.join(labels[:3])} {verb} rising across your network too"
 
 
 def network_story(

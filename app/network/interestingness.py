@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.scoring.canonical import canonical_key
+from app.scoring.canonical import canonical_key, display_name
 
 
 def compute_interestingness(
@@ -72,9 +72,11 @@ def personal_note(
     technologies: list[str],
     owner_techs: set[str],
 ) -> str | None:
-    """Single secondary personalization line for story cards."""
-    tech_keys = {canonical_key(t) for t in technologies}
-    owner_keys = {canonical_key(t) for t in owner_techs}
-    if tech_keys & owner_keys:
-        return "You also work in this area"
-    return None
+    """Personal relevance only when overlap is strong — not a single shared tag."""
+    tech_keys = {canonical_key(t) for t in technologies if t}
+    owner_keys = {canonical_key(t) for t in owner_techs if t}
+    overlap = tech_keys & owner_keys
+    if len(overlap) < 2:
+        return None
+    labels = sorted({display_name(t) for t in overlap})[:4]
+    return f"Strong overlap with your recent direction: {' · '.join(labels)}"

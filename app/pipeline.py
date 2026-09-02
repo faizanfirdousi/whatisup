@@ -22,6 +22,7 @@ from app.github.client import GitHubClient, GitHubRateLimitError
 from app.github.normalize import normalize_event
 from app.scoring.significance import score_event
 from app.scoring.technology import extract_technologies
+from app.scoring.canonical import canonical_key
 from app.narrative.generate import generate_weekly_narrative_enriched
 from app.config import get_settings
 from app.network.thresholds import COLLECT_STALE_SECONDS, NARRATE_LLM_MIN_SCORE
@@ -144,7 +145,9 @@ def _session_technology(session: AsyncSession, name: str) -> Technology | None:
 async def _get_or_create_technology(
     session: AsyncSession, name: str, cache: dict[str, Technology]
 ) -> Technology:
-    name = name.strip().lower()
+    name = canonical_key(name.strip().lower())
+    if not name:
+        raise ValueError("technology name required")
     if name in cache:
         return cache[name]
 
@@ -478,6 +481,11 @@ async def run_collect_for_owner(session: AsyncSession, owner_id: int) -> int:
 
     res = await session.execute(select(Connection.person_id).where(Connection.owner_id == owner_id))
     person_ids = [pid for pid, in res.all()]
+    if owner.person_id and owner.person_id not in person_ids:
+        owner_person = await session.get(Person, owner.person_id)
+        if owner_person:
+            await _ensure_connection(session, owner_id, owner_person, is_close=True)
+            person_ids.append(owner.person_id)
     client = GitHubClient(token=token)
     processed = 0
     tech_cache: dict[str, Technology] = {}

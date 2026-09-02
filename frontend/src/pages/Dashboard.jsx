@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
@@ -7,9 +6,7 @@ import { Loader } from '../components/Loader';
 import { HeroBanner } from '../components/HeroBanner';
 import { StoryCard } from '../components/StoryCard';
 import { CloseCircleCard } from '../components/CloseCircleCard';
-import { YourRecentDirection } from '../components/YourRecentDirection';
 import { NetworkStorySection } from '../components/NetworkStorySection';
-import { ForYouSection } from '../components/ForYouSection';
 
 function readPeriod() {
   const stored = localStorage.getItem('whatisup:period');
@@ -48,14 +45,13 @@ export function Dashboard() {
 
   const stories = useMemo(() => digest?.stories || [], [digest]);
   const closeCircle = digest?.close_circle || [];
-  const yourDirection = digest?.your_direction;
   const intelligence = digest?.network_intelligence || {};
   const hasContent = stories.length > 0 || (intelligence?.story?.stories || []).length > 0;
 
   if (loading) return <Loader />;
 
   if (error) {
-    return <div className="glass-panel" style={{ padding: '2rem' }}>Could not load digest: {error}</div>;
+    return <div className="panel" style={{ padding: '2rem' }}>Could not load digest: {error}</div>;
   }
 
   return (
@@ -67,16 +63,15 @@ export function Dashboard() {
       )}
 
       <NetworkStorySection intelligence={intelligence} />
-      <ForYouSection intelligence={intelligence} />
 
       <section className="dashboard-section">
         <div className="section-heading">
           <h2>Worth your attention</h2>
-          <Link to="/network">Explore full network <ArrowUpRight size={16} /></Link>
+          <Link to="/network">Explore full network</Link>
         </div>
         {stories.length === 0 ? (
-          <div className="glass-panel empty-panel">
-            Nothing worth surfacing yet. We'll highlight meaningful changes here as your network becomes active.
+          <div className="panel empty-panel">
+            Nothing worth surfacing yet. We will highlight meaningful changes here as your network becomes active.
           </div>
         ) : (
           <div className="story-grid">
@@ -86,8 +81,6 @@ export function Dashboard() {
           </div>
         )}
       </section>
-
-      <YourRecentDirection direction={yourDirection} />
 
       {closeCircle.length > 0 && (
         <section className="dashboard-section">
@@ -101,10 +94,6 @@ export function Dashboard() {
           </div>
         </section>
       )}
-
-      <footer className="dashboard-footer">
-        <Link to="/network">Explore full network <ArrowUpRight size={16} /></Link>
-      </footer>
     </div>
   );
 }

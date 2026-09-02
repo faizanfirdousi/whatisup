@@ -10,33 +10,17 @@ function timeGreeting(name) {
 
 export function HeroBanner({ digest, period, onPeriodChange }) {
   const hero = digest?.network_intelligence?.hero || {};
-  const signals = hero.signals || [];
+  const cta = hero.cta || { label: 'Explore network', href: '/network' };
 
   return (
-    <section className="hero-banner">
+    <section className="hero-banner panel">
       <div>
         <p className="eyebrow">{timeGreeting(digest?.owner_name)}</p>
         <h1>{hero.headline || "What's changing in your network"}</h1>
         <p className="hero-kicker">{hero.subhead}</p>
-        {signals.length > 0 && (
-          <div className="hero-signals" aria-label="Network signals">
-            {signals.map((signal) => {
-              const href = signal.direction === 'cluster' || signal.name === 'open-source'
-                ? '/network'
-                : `/network?tech=${encodeURIComponent(signal.name)}`;
-              return (
-                <Link
-                  key={`${signal.name}:${signal.direction}`}
-                  to={href}
-                  className={`signal-chip signal-${signal.direction || 'steady'}`}
-                  title={signal.description}
-                >
-                  {signal.label}
-                </Link>
-              );
-            })}
-          </div>
-        )}
+        <Link to={cta.href || '/network'} className="hero-cta">
+          {cta.label}
+        </Link>
       </div>
       <PeriodSelector value={period} onChange={onPeriodChange} />
     </section>

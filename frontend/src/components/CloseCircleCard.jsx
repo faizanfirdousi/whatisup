@@ -1,5 +1,4 @@
 import React from 'react';
-import { ArrowUpRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TechBadge } from './TechBadge';
 
@@ -20,18 +19,9 @@ export function CloseCircleCard({ item }) {
           <p>@{person.github_username}</p>
         </div>
       </div>
-      {item.current_focus && (
+      {item.direction_area && (
         <p className="current-focus">
-          Currently focused on: <span>{item.current_focus}</span>
-        </p>
-      )}
-      {item.recent_change && (
-        <p className="recent-change">{item.recent_change}</p>
-      )}
-      {(item.meaningful_changes || 0) > 0 && (
-        <p className="meaningful-count">
-          {item.meaningful_changes} meaningful{' '}
-          {item.meaningful_changes === 1 ? 'change' : 'changes'}
+          Recent direction: <span>{item.direction_area}</span>
         </p>
       )}
       {techs.length > 0 && (
@@ -41,9 +31,12 @@ export function CloseCircleCard({ item }) {
           ))}
         </div>
       )}
+      {item.activity_summary && (
+        <p className="meaningful-count">{item.activity_summary}</p>
+      )}
       {repos.length > 0 && <p className="repo-list">{repos.slice(0, 3).join(', ')}</p>}
       <Link to={`/person/${person.id}`} className="compact-link">
-        Open profile <ArrowUpRight size={14} />
+        Open profile
       </Link>
     </article>
   );

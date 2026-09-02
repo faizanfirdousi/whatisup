@@ -37,7 +37,25 @@ def test_enriched_template_is_a_story_not_a_counter():
     assert "opened 1" not in enriched["narrative"].lower()
     assert "kserve" in enriched["narrative"].lower() or "python" in enriched["narrative"].lower()
     assert enriched["activity_type"] == "external_contribution"
-    assert "external" in enriched["why_it_matters"].lower()
+    assert "beyond their own repository" in enriched["why_it_matters"].lower()
+
+
+def test_external_why_it_matters_uses_repo_context():
+    enriched = template_narrative_enriched(
+        {"github_username": "saiyam", "display_name": "Saiyam"},
+        [
+            {
+                "id": 1,
+                "event_type": "pull_request_opened",
+                "repo_full_name": "srelens/srelens",
+                "significance_score": 10,
+                "metadata_": {"is_external": True, "language": "typescript"},
+            }
+        ],
+        [{"name": "typescript", "confidence": 1.0}],
+    )
+    assert "srelens/srelens" in enriched["why_it_matters"]
+    assert "beyond their own repository" in enriched["why_it_matters"].lower()
 
 
 def test_release_why_it_matters_is_release_specific():

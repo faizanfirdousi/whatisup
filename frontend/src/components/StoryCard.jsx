@@ -1,28 +1,25 @@
 import React from 'react';
-import { ArrowUpRight, GitBranch, Package, Rocket, Search, Wrench } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TechBadge } from './TechBadge';
 
 const ACTIVITY = {
-  external_contribution: { label: 'External contribution', icon: GitBranch },
-  release: { label: 'Release', icon: Rocket },
-  new_project: { label: 'New project', icon: Package },
-  deep_work: { label: 'Deep work', icon: Wrench },
-  exploration: { label: 'Exploration', icon: Search },
-  routine: { label: 'Active', icon: Wrench },
+  external_contribution: 'External contribution',
+  release: 'Release',
+  new_project: 'New project',
+  deep_work: 'Deep work',
+  exploration: 'Exploration',
+  routine: 'Active',
 };
 
 export function StoryCard({ story }) {
   const person = story.person || {};
   const activity = ACTIVITY[story.activity_type] || ACTIVITY.routine;
-  const Icon = activity.icon;
 
   return (
     <article className="story-card">
       <div className="story-card-top">
         <span className={`badge activity-badge activity-${story.activity_type || 'routine'}`}>
-          <Icon size={14} />
-          {activity.label}
+          {activity}
         </span>
         <img
           src={person.avatar_url || `https://github.com/${person.github_username}.png`}
@@ -45,10 +42,10 @@ export function StoryCard({ story }) {
         </div>
       )}
       {story.personal_note && (
-        <p className="personal-note">{story.personal_note}</p>
+        <p className="personal-note personal-note-strong">{story.personal_note}</p>
       )}
       <Link to={`/person/${person.id}`} className="story-link">
-        View person <ArrowUpRight size={16} />
+        View person
       </Link>
     </article>
   );

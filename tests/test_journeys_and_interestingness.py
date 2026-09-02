@@ -74,6 +74,9 @@ def test_interestingness_boosts_close_circle_overlap():
     assert close["relevance"] > 0
 
 
-def test_personal_note_when_overlap():
-    note = personal_note(technologies=["go", "helm"], owner_techs={"golang"})
-    assert note == "You also work in this area"
+def test_personal_note_requires_strong_overlap():
+    assert personal_note(technologies=["go", "helm"], owner_techs={"golang"}) is None
+    note = personal_note(technologies=["go", "kubernetes", "helm"], owner_techs={"golang", "kubernetes"})
+    assert note is not None
+    assert "Strong overlap" in note
+    assert "Go" in note or "Kubernetes" in note

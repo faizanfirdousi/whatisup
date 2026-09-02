@@ -1,13 +1,10 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowDown, ArrowUp, Sparkles } from 'lucide-react';
 
-function MovementRow({ item, type }) {
-  const Icon = type === 'growing' ? ArrowUp : type === 'new' ? Sparkles : null;
+function MovementRow({ item }) {
   return (
     <div className="movement-row">
       <div className="movement-row-head">
-        {Icon && <Icon size={16} />}
         <Link to={`/network?tech=${encodeURIComponent(item.name)}`}>{item.name}</Link>
       </div>
       <p>{item.signal || `${item.people_count} people`}</p>
@@ -28,7 +25,7 @@ export function TechnologyMovement({ movement }) {
         <div className="section-heading">
           <h2>Technology movement</h2>
         </div>
-        <div className="glass-panel empty-panel">
+        <div className="panel empty-panel">
           No clear technology movement yet. Patterns will appear as your network becomes active.
         </div>
       </section>
@@ -42,23 +39,23 @@ export function TechnologyMovement({ movement }) {
       </div>
       <div className="movement-grid">
         {growing.length > 0 && (
-          <div className="movement-panel glass-panel">
+          <div className="movement-panel panel">
             <h3>Growing recently</h3>
             {growing.map((item) => (
-              <MovementRow key={item.name} item={item} type="growing" />
+              <MovementRow key={item.name} item={item} />
             ))}
           </div>
         )}
         {fresh.length > 0 && (
-          <div className="movement-panel glass-panel">
+          <div className="movement-panel panel">
             <h3>New this period</h3>
             {fresh.map((item) => (
-              <MovementRow key={item.name} item={item} type="new" />
+              <MovementRow key={item.name} item={item} />
             ))}
           </div>
         )}
         {established.length > 0 && (
-          <div className="movement-panel glass-panel">
+          <div className="movement-panel panel">
             <h3>Established in your network</h3>
             {established.map((item) => (
               <div key={item.name} className="movement-row">

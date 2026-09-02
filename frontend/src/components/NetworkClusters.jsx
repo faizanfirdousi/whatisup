@@ -1,5 +1,4 @@
 import React from 'react';
-import { ArrowUpRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TechBadge } from './TechBadge';
 
@@ -14,7 +13,7 @@ export function NetworkClusters({ clusters }) {
       </div>
       <div className="cluster-grid">
         {items.map((cluster) => (
-          <article key={cluster.id} className="cluster-card glass-panel">
+          <article key={cluster.id} className="cluster-card panel">
             <h3>{cluster.headline}</h3>
             <p>{cluster.summary}</p>
             {(cluster.technologies || []).length > 0 && (
@@ -32,7 +31,7 @@ export function NetworkClusters({ clusters }) {
                 to={`/network?tech=${encodeURIComponent(cluster.technologies[0])}`}
                 className="compact-link"
               >
-                Explore related people <ArrowUpRight size={14} />
+                Explore related people
               </Link>
             )}
           </article>

@@ -82,12 +82,27 @@ def test_build_network_intelligence_has_hero_and_curated_story():
         owner_focus="go projects",
     )
 
-    assert payload["hero"]["headline"]
-    assert len(payload["hero"]["signals"]) <= 3
-    assert isinstance(payload["story"]["stories"], list)
+    assert "strongest active theme" in payload["hero"]["headline"].lower()
+    assert payload["hero"]["cta"]["label"].startswith("Explore ")
+    assert payload["hero"]["signals"] == []
+    assert all("spreading" not in s["title"].lower() for s in payload["story"]["stories"])
+    assert payload["story"]["stories"]
+    assert all("recent activity involving" in s["body"].lower() for s in payload["story"]["stories"])
     assert payload["technology_movement"]["established"]
     assert isinstance(payload["clusters"], list)
     assert payload.get("for_you") is not None
+    assert "direction" not in (payload.get("for_you") or {})
+
+
+def test_hero_has_single_cta_not_tech_chips():
+    facts = _facts()
+    payload = build_network_intelligence(
+        facts,
+        usernames={1: "a", 2: "b", 3: "c", 4: "d"},
+        owner_techs={"go"},
+    )
+    assert payload["hero"]["cta"]["href"] == "/network"
+    assert payload["hero"]["signals"] == []
 
 
 def test_infer_focus_uses_repos_when_no_focus_area():

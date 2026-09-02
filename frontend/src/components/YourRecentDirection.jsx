@@ -1,5 +1,4 @@
 import React from 'react';
-import { ArrowUpRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TechBadge } from './TechBadge';
 
@@ -15,11 +14,11 @@ export function YourRecentDirection({ direction }) {
         <h2>Your recent direction</h2>
         {direction.person_id && (
           <Link to={`/person/${direction.person_id}`} className="compact-link">
-            Your profile <ArrowUpRight size={14} />
+            Your profile
           </Link>
         )}
       </div>
-      <article className="your-direction-card glass-panel">
+      <article className="your-direction-card panel">
         {techs.length > 0 && (
           <div className="your-direction-block">
             <h3>Recently focused on</h3>
@@ -33,7 +32,7 @@ export function YourRecentDirection({ direction }) {
         {repos.length > 0 && (
           <div className="your-direction-block">
             <h3>Recent work</h3>
-            <p className="repo-list">{repos.join('\n')}</p>
+            <p className="repo-list">{repos.join(', ')}</p>
           </div>
         )}
         {direction.network_overlap && (

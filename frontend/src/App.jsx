@@ -6,19 +6,21 @@ import { Network } from './pages/Network';
 import { PersonDetail } from './pages/PersonDetail';
 import { Admin } from './pages/Admin';
 import { Login } from './pages/Login';
+import { TermsOfService, PrivacyPolicy } from './pages/Legal';
 import { AuthProvider, useAuth } from './hooks/useAuth';
+import { Loader } from './components/Loader';
 
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
-  
+
   if (loading) {
-    return <div style={{ padding: '2rem', color: 'var(--text-secondary)' }}>Loading...</div>;
+    return <Loader />;
   }
-  
+
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return children;
 }
 
@@ -26,6 +28,8 @@ function AppContent() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/terms" element={<TermsOfService />} />
+      <Route path="/privacy" element={<PrivacyPolicy />} />
       <Route
         path="*"
         element={

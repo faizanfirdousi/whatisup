@@ -1,5 +1,4 @@
 import React from 'react';
-import { ArrowUpRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TechBadge } from './TechBadge';
 
@@ -7,8 +6,9 @@ export function ForYouSection({ intelligence }) {
   const forYou = intelligence?.for_you;
   if (!forYou) return null;
 
-  const { direction, similar_people: similarPeople, relevant_cluster: cluster } = forYou;
-  const hasContent = direction || (similarPeople || []).length || cluster;
+  const similarPeople = forYou.similar_people || [];
+  const cluster = forYou.relevant_cluster;
+  const hasContent = similarPeople.length > 0 || cluster;
   if (!hasContent) return null;
 
   return (
@@ -17,25 +17,16 @@ export function ForYouSection({ intelligence }) {
         <h2>For you</h2>
       </div>
       <div className="for-you-stack">
-        {direction && (
-          <article className="for-you-block glass-panel">
-            <h3>Your direction</h3>
-            <p className="for-you-lead">{direction.headline}</p>
-            <p>{direction.summary}</p>
-          </article>
-        )}
-
-        {(similarPeople || []).length > 0 && (
-          <article className="for-you-block glass-panel">
+        {similarPeople.length > 0 && (
+          <article className="for-you-block panel">
             <h3>People moving in a similar direction</h3>
             <ul className="similar-people-list">
               {similarPeople.map((person) => (
                 <li key={person.person_id}>
-                  <Link to={`/person/${person.person_id}`}>@{person.github_username}</Link>
-                  <span>
-                    {(person.technologies || []).join(' · ')}
-                    {person.cluster ? ` · ${person.cluster}` : ''}
-                  </span>
+                  <Link to={`/person/${person.person_id}`} className="similar-person-link">
+                    @{person.github_username}
+                  </Link>
+                  <span>{person.hook || (person.technologies || []).join(' · ')}</span>
                 </li>
               ))}
             </ul>
@@ -43,7 +34,7 @@ export function ForYouSection({ intelligence }) {
         )}
 
         {cluster && (
-          <article className="for-you-block glass-panel">
+          <article className="for-you-block panel">
             <h3>A cluster relevant to you</h3>
             <p className="for-you-lead">{cluster.headline}</p>
             <p>{cluster.summary}</p>
@@ -59,7 +50,7 @@ export function ForYouSection({ intelligence }) {
                 to={`/network?tech=${encodeURIComponent(cluster.explore_tech)}`}
                 className="compact-link"
               >
-                Explore the cluster <ArrowUpRight size={14} />
+                Explore the cluster
               </Link>
             )}
           </article>

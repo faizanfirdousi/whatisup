@@ -80,17 +80,12 @@ def select_diverse_stories(stories: list[dict[str, Any]], limit: int = 5) -> lis
             selected.append(best)
 
     remaining = [s for s in pool if s not in selected]
-    used_types = {s.get("activity_type") for s in selected}
 
     while len(selected) < limit and remaining:
-        novel = [s for s in remaining if s.get("activity_type") not in used_types]
-        if not novel:
-            break
-        best = _pick_best(novel, selected)
+        best = _pick_best(remaining, selected)
         if best is None:
             break
         selected.append(best)
         remaining.remove(best)
-        used_types.add(best.get("activity_type"))
 
     return selected[:limit]

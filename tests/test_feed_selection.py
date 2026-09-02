@@ -27,7 +27,7 @@ def _story(
     }
 
 
-def test_limits_external_contributions_to_one_when_other_types_exist():
+def test_reserved_slots_pick_one_per_category_then_fill_to_limit():
     stories = [
         _story(1, "external_contribution", 200, primary_tech="go", repo_ecosystem="k8s"),
         _story(2, "external_contribution", 190, primary_tech="go", repo_ecosystem="k8s"),
@@ -37,14 +37,26 @@ def test_limits_external_contributions_to_one_when_other_types_exist():
         _story(6, "new_project", 150, primary_tech="typescript", repo_ecosystem="acme"),
     ]
     picked = select_diverse_stories(stories, limit=5)
-    external = [s for s in picked if s["activity_type"] == "external_contribution"]
     types = {s["activity_type"] for s in picked}
 
-    assert len(external) == 1
-    assert external[0]["person"]["id"] == 1
+    assert picked[0]["person"]["id"] == 1
     assert "release" in types
     assert "new_project" in types
-    assert len(types) == len(picked)
+    assert len(picked) == 5
+
+
+def test_fill_reaches_limit_even_when_activity_types_repeat():
+    stories = [
+        _story(1, "external_contribution", 200),
+        _story(2, "release", 190),
+        _story(3, "deep_work", 180),
+        _story(4, "new_project", 170),
+        _story(5, "external_contribution", 160),
+        _story(6, "deep_work", 150),
+    ]
+    picked = select_diverse_stories(stories, limit=6)
+    assert len(picked) == 6
+    assert len({s["person"]["id"] for s in picked}) == 6
 
 
 def test_prefers_different_activity_types_over_same_rank_duplicates():

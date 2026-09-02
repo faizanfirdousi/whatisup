@@ -109,7 +109,7 @@ def test_digest_v2_uses_stories_not_raw_scores():
     assert len(payload["stories"]) == 2
     assert all("significance_total" not in story for story in payload["stories"])
     assert payload["close_circle"][0]["person"]["github_username"] == "alice"
-    assert payload["close_circle"][0]["current_focus"]
+    assert payload["close_circle"][0]["activity_summary"]
     assert {row["person"]["id"] for row in payload["people"]} == {1, 2}
 
 

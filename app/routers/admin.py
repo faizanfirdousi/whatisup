@@ -101,6 +101,15 @@ async def update_connection(
     return {"status": "success", "connection_id": conn.id, "is_close": conn.is_close}
 
 
+@router.post("/backfill-canonical-tech", dependencies=[Depends(verify_admin_secret)])
+async def backfill_canonical_tech(db: AsyncSession = Depends(get_db)):
+    from app.scoring.canonical_backfill import backfill_canonical_technologies
+
+    stats = await backfill_canonical_technologies(db)
+    await db.commit()
+    return {"status": "success", **stats}
+
+
 @router.post("/run-pipeline", dependencies=[Depends(verify_admin_secret)])
 async def trigger_pipeline(db: AsyncSession = Depends(get_db)):
     processed = await run_global_pipeline(db)
