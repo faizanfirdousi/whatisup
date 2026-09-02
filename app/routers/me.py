@@ -80,7 +80,7 @@ async def _maybe_start_collect(
     return True
 
 
-async def _highlights_payload(session: AsyncSession, owner: Owner, period: str = "7d") -> dict:
+async def _highlights_payload(session: AsyncSession, owner: Owner, period: str = "2d") -> dict:
     _, _, period_start, _ = get_period_bounds(period)
     since = max(default_since(owner.highlights_acked_at), period_start)
     items = await compute_since_items(session, owner, since=since)
@@ -98,7 +98,7 @@ async def _highlights_payload(session: AsyncSession, owner: Owner, period: str =
 
 @router.get("/me/since")
 async def get_since(
-    period: str = "7d",
+    period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
 ):
@@ -111,7 +111,7 @@ async def get_since(
 async def get_highlights(
     background_tasks: BackgroundTasks,
     refresh: int = Query(default=0),
-    period: str = "7d",
+    period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
 ):

@@ -40,7 +40,7 @@ export function PersonDetail() {
             <span style={{ color: 'var(--text-tertiary)' }}>None extracted yet.</span>
           ) : (
             person.technologies.map((t) => (
-              <TechBadge key={t.name} name={t.name} confidence={t.confidence} />
+              <TechBadge key={t.name} name={t.name} />
             ))
           )}
         </div>

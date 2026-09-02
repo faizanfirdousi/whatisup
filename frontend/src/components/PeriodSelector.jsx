@@ -1,11 +1,5 @@
 import React from 'react';
-
-const PERIODS = [
-  { value: '7d', label: '7 days' },
-  { value: '14d', label: '14 days' },
-  { value: '30d', label: '30 days' },
-  { value: 'this_week', label: 'This week' },
-];
+import { PERIODS } from '../period';
 
 export function PeriodSelector({ value, onChange }) {
   const selectPeriod = (period) => {

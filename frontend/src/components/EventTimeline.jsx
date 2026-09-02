@@ -13,9 +13,8 @@ export function EventTimeline({ events }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
       {events.map((event) => (
         <div key={event.id} className="glass-card" style={{ padding: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem' }}>
+          <div>
             <strong>{event.event_type.replaceAll('_', ' ')}</strong>
-            <span className="badge badge-score">+{event.significance_score}</span>
           </div>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
             {event.repo_full_name || 'unknown repo'}

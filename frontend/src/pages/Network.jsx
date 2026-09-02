@@ -5,11 +5,7 @@ import { api } from '../api/client';
 import { Loader } from '../components/Loader';
 import { NetworkStory } from '../components/NetworkStory';
 import { PeriodSelector } from '../components/PeriodSelector';
-
-function readPeriod() {
-  const stored = localStorage.getItem('whatisup:period');
-  return ['7d', '14d', '30d', 'this_week'].includes(stored) ? stored : '7d';
-}
+import { readStoredPeriod } from '../period';
 
 const GROUPS = [
   { key: 'more_active', label: 'More active' },
@@ -20,7 +16,7 @@ const GROUPS = [
 export function Network() {
   const [searchParams] = useSearchParams();
   const tech = searchParams.get('tech') || '';
-  const [period, setPeriod] = useState(readPeriod);
+  const [period, setPeriod] = useState(readStoredPeriod);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
   const [syncing, setSyncing] = useState(false);

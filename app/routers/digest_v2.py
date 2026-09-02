@@ -370,7 +370,7 @@ def build_digest_payload(
 
 @router.get("/me/digest/v2")
 async def get_my_digest_v2(
-    period: str = "7d",
+    period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
 ):

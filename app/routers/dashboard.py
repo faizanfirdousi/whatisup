@@ -110,7 +110,7 @@ from app.auth.session import get_current_owner
 
 @router.get("/me/digest")
 async def get_my_digest(
-    period: str = "7d",
+    period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
 ):
@@ -303,7 +303,7 @@ async def get_person_events(person_id: int, db: AsyncSession = Depends(get_db), 
 
 @router.get("/me/stats")
 async def get_my_stats(
-    period: str = "7d",
+    period: str = "2d",
     db: AsyncSession = Depends(get_db),
     owner: Owner = Depends(get_current_owner),
 ):

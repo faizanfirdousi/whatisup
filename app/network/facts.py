@@ -22,12 +22,12 @@ from app.pipeline import current_week_bounds
 from app.scoring.technology import extract_technologies
 
 
-VALID_PERIODS = {"7d", "14d", "30d", "this_week"}
+VALID_PERIODS = {"2d", "7d", "14d", "30d", "this_week"}
 
 
 def get_period_bounds(period: str, today: date | None = None) -> tuple[date, date, datetime, datetime]:
     if period not in VALID_PERIODS:
-        period = "7d"
+        period = "2d"
     today = today or datetime.now(timezone.utc).date()
     if period == "this_week":
         return current_week_bounds(today)
@@ -338,7 +338,7 @@ def facts_from_loaded(
 
 
 async def compute_network_facts(
-    session: AsyncSession, owner_id: int, today: date | None = None, period: str = "7d"
+    session: AsyncSession, owner_id: int, today: date | None = None, period: str = "2d"
 ) -> dict:
     owner = await session.get(Owner, owner_id)
     week_start, week_end, start_dt, end_dt = get_period_bounds(period, today)

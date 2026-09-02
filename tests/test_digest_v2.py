@@ -5,11 +5,17 @@ from app.network.facts import facts_from_loaded, get_period_bounds
 from app.routers.digest_v2 import build_digest_payload
 
 
-def test_period_bounds_default_to_7d():
+def test_period_bounds_default_to_2d():
     start, end, start_dt, end_dt = get_period_bounds("nope")
-    assert (end - start).days == 6
+    assert (end - start).days == 1
     assert start_dt.tzinfo is not None
     assert end_dt >= start_dt
+
+
+def test_period_bounds_2d_is_two_calendar_days():
+    start, end, _, _ = get_period_bounds("2d", today=date(2026, 9, 2))
+    assert start == date(2026, 9, 1)
+    assert end == date(2026, 9, 2)
 
 
 def _event(person_id, **kwargs):

@@ -7,14 +7,10 @@ import { HeroBanner } from '../components/HeroBanner';
 import { StoryCard } from '../components/StoryCard';
 import { CloseCircleCard } from '../components/CloseCircleCard';
 import { NetworkStorySection } from '../components/NetworkStorySection';
-
-function readPeriod() {
-  const stored = localStorage.getItem('whatisup:period');
-  return ['7d', '14d', '30d', 'this_week'].includes(stored) ? stored : '7d';
-}
+import { readStoredPeriod } from '../period';
 
 export function Dashboard() {
-  const [period, setPeriod] = useState(readPeriod);
+  const [period, setPeriod] = useState(readStoredPeriod);
   const { data: digest, loading, error } = useApi(api.getDigestV2, [period]);
   const { data: highlights, refetch: refetchHighlights } = useApi(api.getHighlightsRefresh, [period]);
 
